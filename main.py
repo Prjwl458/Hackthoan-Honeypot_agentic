@@ -30,7 +30,7 @@ class Metadata(BaseModel):
 
 class ScamRequest(BaseModel):
     message: Message
-    conversationHistory: List[Message] = []
+    conversationHistory: Optional[List[Message]] = Field(default_factory=list)
     metadata: Optional[Metadata] = None
 
 class EngagementMetrics(BaseModel):
