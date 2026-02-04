@@ -17,6 +17,7 @@ app = FastAPI(title="Agentic Honey-Pot API")
 
 # Configuration
 API_KEY = os.getenv("YOUR_SECRET_API_KEY", "default_secret_key")
+GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "https://hackathon.guvi.in/api/updateHoneyPotFinalResult")
 
 # Models
 class Message(BaseModel):
@@ -52,16 +53,17 @@ async def verify_api_key(x_api_key: str = Header(None)):
         raise HTTPException(status_code=403, detail="Invalid API Key")
     return x_api_key
 
-def send_guvi_callback(payload: dict):
-    """Background task to send intelligence to GUVI"""
+def send_guvi_callback(session_id: str, payload: dict):
+    """Background task to send intelligence to GUVI with detailed logging"""
     try:
-        requests.post(
-            "https://hackathon.guvi.in/api/updateHoneyPotFinalResult",
+        response = requests.post(
+            GUVI_CALLBACK_URL,
             json=payload,
-            timeout=10
+            timeout=15
         )
+        print(f"DEBUG: GUVI Callback for {session_id} returned {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"GUVI Callback failed: {e}")
+        print(f"ERROR: GUVI Callback for {session_id} failed: {e}")
 
 @app.post("/message", response_model=ScamResponse)
 async def handle_message(
@@ -86,21 +88,29 @@ async def handle_message(
     
     # 4. Mandatory Callback (Non-blocking via BackgroundTasks)
     # Using Option 1: Live Updates for maximum data persistence.
+    
+    # Intelligence validation
+    ext_intel = {
+        "bankAccounts": intel.get("bankAccounts", []),
+        "upiIds": intel.get("upiIds", []), 
+        "phishingLinks": intel.get("phishingLinks", []), 
+        "phoneNumbers": intel.get("phoneNumbers", []),
+        "suspiciousKeywords": intel.get("suspiciousKeywords", [])
+    }
+    
+    has_entities = any(len(v) > 0 for v in ext_intel.values())
+    if not has_entities:
+        print(f"WARNING: Scam detected for session {request.sessionId} but no entities extracted.")
+
     callback_payload = {
         "sessionId": request.sessionId,
         "scamDetected": True,
-        "totalMessagesExchanged": len(request.conversationHistory) + 1, # Accurate count (History + Current)
-        "extractedIntelligence": {
-            "bankAccounts": intel.get("bankAccounts", []),
-            "upiIds": intel.get("upiIds", []), # camelCase validated
-            "phishingLinks": intel.get("phishingLinks", []), # camelCase validated
-            "phoneNumbers": intel.get("phoneNumbers", []),
-            "suspiciousKeywords": intel.get("suspiciousKeywords", [])
-        },
+        "totalMessagesExchanged": len(request.conversationHistory) + 1,
+        "extractedIntelligence": ext_intel,
         "agentNotes": intel.get("agentNotes", "Scammer engaged.")
     }
     
-    background_tasks.add_task(send_guvi_callback, callback_payload)
+    background_tasks.add_task(send_guvi_callback, request.sessionId, callback_payload)
 
     return ScamResponse(
         status="success",

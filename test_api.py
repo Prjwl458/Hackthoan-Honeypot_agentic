@@ -12,7 +12,7 @@ payload = {
   "sessionId": "wertyu-dfghj-ertyui",
   "message": {
     "sender": "scammer",
-    "text": "Your bank account will be blocked today. Verify immediately at http://scam-bank.com. Contact us at +91-9876543210.",
+    "text": "CONGRATULATIONS! You have been selected for a Work-From-Home job with Amazon. Earn 5000 daily. Just pay a 500 registration fee to our HR UPI: jobhero@paytm. Contact +91 9988776655 for details.",
     "timestamp": int(time.time() * 1000)
   },
   "conversationHistory": [],

@@ -108,29 +108,37 @@ class ScamAgent:
             "suspiciousKeywords": []
         }
 
-        # Use LLM for more sophisticated extraction
+        # Use LLM for dynamic and sophisticated extraction
         prompt = f"""
-        Extract scam intelligence from this conversation:
+        Analyze this conversation transcript for scam intelligence:
         "{full_text}"
+
+        Your tasks:
+        1. Identify Intent: Is the scammer trying to create urgency, ask for sensitive data, or offering something too good to be true?
+        2. Generic Extraction: Extract any names of banks, financial apps (like UPI, WhatsApp, YONO), or specific types of sensitive data requested (OTP, CVV, PIN, passwords).
+        3. Dynamic Keyword Logic: Identify any specific words or phrases that convey pressure, fear, or excitement as 'suspiciousKeywords'.
+
         Return ONLY a raw JSON object with these exact keys: 
-        bankAccounts (list), upiIds (list), phishingLinks (list), phoneNumbers (list), suspiciousKeywords (list), agentNotes (string summary of tactics).
+        bankAccounts (list), 
+        upiIds (list), 
+        phishingLinks (list), 
+        phoneNumbers (list), 
+        suspiciousKeywords (list), 
+        agentNotes (string summary: include the intent identified and any financial entities/apps found).
+
         DO NOT include any explanation or markdown formatting like ```json.
         """
         messages = [{"role": "user", "content": prompt}]
 
         try:
             llm_response = self._call_llm_api(messages, response_as_json=True)
-            # OpenRouter models often return JSON as a string.
             content = llm_response["choices"][0]["message"]["content"].strip()
             
-            # Basic cleanup in case the model ignored "no markdown" instruction
-            if content.startswith("```"):
-                content = content.split("\n", 1)[-1]
-            if content.endswith("```"):
-                content = content.rsplit("\n", 1)[0]
-            content = content.strip()
-            if content.startswith("json"):
-                content = content[4:].strip()
+            # Bulletproof Regex-based JSON extraction
+            # This finds the first { and last } to ignore any text the model might add outside the JSON
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                content = json_match.group(0)
 
             llm_intel = json.loads(content)
             # Merge with regex results, ensuring keys exist
