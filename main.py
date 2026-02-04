@@ -1,6 +1,8 @@
-from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Union, Dict
 import os
 import time
 import requests
@@ -15,6 +17,16 @@ agent = ScamAgent()
 
 app = FastAPI(title="Agentic Honey-Pot API")
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log the raw request body on validation error"""
+    body = await request.body()
+    print(f"ERROR: Validation failed for request. Raw body: {body.decode()}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": body.decode()},
+    )
+
 # Configuration
 API_KEY = os.getenv("YOUR_SECRET_API_KEY", "default_secret_key")
 GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "https://hackathon.guvi.in/api/updateHoneyPotFinalResult")
@@ -23,7 +35,7 @@ GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "https://hackathon.guvi.in/ap
 class Message(BaseModel):
     sender: str
     text: str
-    timestamp: int # Updated to Epoch time format in ms
+    timestamp: Union[int, float] # Flexible: accepts int or float
 
 class Metadata(BaseModel):
     channel: Optional[str] = "SMS"
@@ -31,10 +43,10 @@ class Metadata(BaseModel):
     locale: Optional[str] = "IN"
 
 class ScamRequest(BaseModel):
-    sessionId: str # Mandatory sessionId
+    sessionId: str # exact camelCase
     message: Message
     conversationHistory: Optional[List[Message]] = Field(default_factory=list)
-    metadata: Optional[Metadata] = None
+    metadata: Optional[Union[Metadata, Dict]] = Field(default_factory=dict) # Flexible dict or Metadata model
 
 class ExtractedIntelligence(BaseModel):
     bankAccounts: List[str] = []
@@ -84,7 +96,8 @@ async def handle_message(
     intel = agent.extract_intelligence(request.message.text, history_list)
     
     # 3. Generate Agent Response (Engagement)
-    agent_reply = agent.generate_response(request.message.text, history_list, request.metadata.model_dump() if request.metadata else {})
+    metadata_dict = request.metadata if isinstance(request.metadata, dict) else request.metadata.model_dump()
+    agent_reply = agent.generate_response(request.message.text, history_list, metadata_dict)
     
     # 4. Mandatory Callback (Non-blocking via BackgroundTasks)
     # Using Option 1: Live Updates for maximum data persistence.
