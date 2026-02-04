@@ -6,6 +6,7 @@ from typing import List, Optional, Union, Dict
 import os
 import time
 import requests
+import traceback
 from datetime import datetime
 from dotenv import load_dotenv
 from agent import ScamAgent
@@ -31,34 +32,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 API_KEY = os.getenv("YOUR_SECRET_API_KEY", "default_secret_key")
 GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "https://hackathon.guvi.in/api/updateHoneyPotFinalResult")
 
-# Models
-class Message(BaseModel):
-    sender: str
-    text: str
-    timestamp: Union[int, float] # Flexible: accepts int or float
-
-class Metadata(BaseModel):
-    channel: Optional[str] = "SMS"
-    language: Optional[str] = "English"
-    locale: Optional[str] = "IN"
-
-class ScamRequest(BaseModel):
-    sessionId: str # exact camelCase
-    message: Message
-    conversationHistory: Optional[List[Message]] = Field(default_factory=list)
-    metadata: Optional[Union[Metadata, Dict]] = Field(default_factory=dict) # Flexible dict or Metadata model
-
-class ExtractedIntelligence(BaseModel):
-    bankAccounts: List[str] = []
-    upiIds: List[str] = []
-    phishingLinks: List[str] = []
-    phoneNumbers: List[str] = []
-    suspiciousKeywords: List[str] = []
-
-class ScamResponse(BaseModel):
-    status: str
-    reply: str # Updated response format
-
 # Security
 async def verify_api_key(x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
@@ -77,58 +50,79 @@ def send_guvi_callback(session_id: str, payload: dict):
     except Exception as e:
         print(f"ERROR: GUVI Callback for {session_id} failed: {e}")
 
-@app.post("/message", response_model=ScamResponse)
+@app.post("/message")
 async def handle_message(
-    request: ScamRequest, 
+    request: Request, 
     background_tasks: BackgroundTasks,
     api_key: str = Depends(verify_api_key)
 ):
-    # Convert conversation history to simple dict list for the agent
-    history_list = [{"sender": m.sender, "text": m.text} for m in request.conversationHistory]
-    
-    # 1. Detect Scam
-    is_scam = agent.detect_scam(request.message.text, history_list)
-    
-    if not is_scam:
-        return ScamResponse(status="success", reply="Hello! How can I help you today?")
+    try:
+        # 0. Raw Body Access & Logging
+        body = await request.json()
+        print(f"RAW REQUEST: {body}")
 
-    # 2. Extract Intelligence
-    intel = agent.extract_intelligence(request.message.text, history_list)
-    
-    # 3. Generate Agent Response (Engagement)
-    metadata_dict = request.metadata if isinstance(request.metadata, dict) else request.metadata.model_dump()
-    agent_reply = agent.generate_response(request.message.text, history_list, metadata_dict)
-    
-    # 4. Mandatory Callback (Non-blocking via BackgroundTasks)
-    # Using Option 1: Live Updates for maximum data persistence.
-    
-    # Intelligence validation
-    ext_intel = {
-        "bankAccounts": intel.get("bankAccounts", []),
-        "upiIds": intel.get("upiIds", []), 
-        "phishingLinks": intel.get("phishingLinks", []), 
-        "phoneNumbers": intel.get("phoneNumbers", []),
-        "suspiciousKeywords": intel.get("suspiciousKeywords", [])
-    }
-    
-    has_entities = any(len(v) > 0 for v in ext_intel.values())
-    if not has_entities:
-        print(f"WARNING: Scam detected for session {request.sessionId} but no entities extracted.")
+        # 1. Manual Field Extraction with case-insensitive fallback
+        # Spec says 'sessionId' but some bots might send 'sessionID'
+        session_id = body.get('sessionId') or body.get('sessionID') or "unknown_session"
+        
+        latest_message_obj = body.get('message', {})
+        text = latest_message_obj.get('text', "")
+        
+        # conversationHistory handling
+        history = body.get('conversationHistory') or []
+        # Ensure history is a list for the agent
+        if not isinstance(history, list):
+            history = []
+            
+        metadata = body.get('metadata') or {}
+        
+        # 1. Detect Scam
+        is_scam = agent.detect_scam(text, history)
+        
+        if not is_scam:
+            return {"status": "success", "reply": "Hello! How can I help you today?"}
 
-    callback_payload = {
-        "sessionId": request.sessionId,
-        "scamDetected": True,
-        "totalMessagesExchanged": len(request.conversationHistory) + 1,
-        "extractedIntelligence": ext_intel,
-        "agentNotes": intel.get("agentNotes", "Scammer engaged.")
-    }
-    
-    background_tasks.add_task(send_guvi_callback, request.sessionId, callback_payload)
+        # 2. Extract Intelligence
+        intel = agent.extract_intelligence(text, history)
+        
+        # 3. Generate Agent Response (Engagement)
+        agent_reply = agent.generate_response(text, history, metadata)
+        
+        # 4. Mandatory Callback (Non-blocking via BackgroundTasks)
+        ext_intel = {
+            "bankAccounts": intel.get("bankAccounts", []),
+            "upiIds": intel.get("upiIds", []), 
+            "phishingLinks": intel.get("phishingLinks", []), 
+            "phoneNumbers": intel.get("phoneNumbers", []),
+            "suspiciousKeywords": intel.get("suspiciousKeywords", [])
+        }
+        
+        has_entities = any(len(v) > 0 for v in ext_intel.values())
+        if not has_entities:
+            print(f"WARNING: Scam detected for session {session_id} but no entities extracted.")
 
-    return ScamResponse(
-        status="success",
-        reply=agent_reply
-    )
+        callback_payload = {
+            "sessionId": session_id,
+            "scamDetected": True,
+            "totalMessagesExchanged": len(history) + 1,
+            "extractedIntelligence": ext_intel,
+            "agentNotes": intel.get("agentNotes", "Scammer engaged.")
+        }
+        
+        background_tasks.add_task(send_guvi_callback, session_id, callback_payload)
+
+        return {
+            "status": "success",
+            "reply": agent_reply
+        }
+
+    except Exception as e:
+        print(f"CRITICAL ERROR in handle_message: {e}")
+        print(traceback.format_exc())
+        return JSONResponse(
+            status_code=200, # Return 200 to keep the bot engaged even on error
+            content={"status": "error", "reply": "I'm sorry, can you repeat that?"}
+        )
 
 if __name__ == "__main__":
     import uvicorn
