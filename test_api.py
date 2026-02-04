@@ -1,5 +1,6 @@
 import requests
 import json
+import time
 
 url = "http://127.0.0.1:8000/message"
 headers = {
@@ -8,31 +9,19 @@ headers = {
 }
 
 payload = {
+  "sessionId": "wertyu-dfghj-ertyui",
   "message": {
-  "sender": "scammer",
-  "text": "Pay the verification fee now",
-  "timestamp": "2026-01-21T10:15:30Z"
-},
-  "conversationHistory": [
-  {
     "sender": "scammer",
-    "text": "Your account is blocked",
-    "timestamp": "2026-01-21T10:10:00Z"
+    "text": "Your bank account will be blocked today. Verify immediately at http://scam-bank.com. Contact us at +91-9876543210.",
+    "timestamp": int(time.time() * 1000)
   },
-  {
-    "sender": "user",
-    "text": "Why is it blocked?",
-    "timestamp": "2026-01-21T10:12:00Z"
-  }
-]
-,
+  "conversationHistory": [],
   "metadata": {
     "channel": "SMS",
     "language": "English",
     "locale": "IN"
   }
 }
-
 
 try:
     response = requests.post(url, headers=headers, json=payload)

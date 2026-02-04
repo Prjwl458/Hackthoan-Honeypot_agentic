@@ -97,19 +97,23 @@ class ScamAgent:
         # Regex for common patterns
         upi_pattern = r'[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}'
         url_pattern = r'(https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+)'
-        bank_pattern = r'\b\d{9,18}\b' # Simple bank account digit pattern
+        bank_pattern = r'\b\d{9,18}\b' 
+        phone_pattern = r'\b(?:\+?\d{1,3}[- ]?)?\(?\d{3}\)?[- ]?\d{3}[- ]?\d{4}\b' # Basic phone regex
 
         intel = {
             "bankAccounts": list(set(re.findall(bank_pattern, full_text))),
             "upiIds": list(set(re.findall(upi_pattern, full_text))),
-            "phishingLinks": list(set(re.findall(url_pattern, full_text)))
+            "phishingLinks": list(set(re.findall(url_pattern, full_text))),
+            "phoneNumbers": list(set(re.findall(phone_pattern, full_text))),
+            "suspiciousKeywords": []
         }
 
         # Use LLM for more sophisticated extraction
         prompt = f"""
         Extract scam intelligence from this conversation:
         "{full_text}"
-        Return ONLY a raw JSON object with these exact keys: bankAccounts (list), upiIds (list), phishingLinks (list), agentNotes (string summary of tactics).
+        Return ONLY a raw JSON object with these exact keys: 
+        bankAccounts (list), upiIds (list), phishingLinks (list), phoneNumbers (list), suspiciousKeywords (list), agentNotes (string summary of tactics).
         DO NOT include any explanation or markdown formatting like ```json.
         """
         messages = [{"role": "user", "content": prompt}]
@@ -134,14 +138,16 @@ class ScamAgent:
                 intel["bankAccounts"] = list(set(intel["bankAccounts"] + llm_intel.get("bankAccounts", [])))
                 intel["upiIds"] = list(set(intel["upiIds"] + llm_intel.get("upiIds", [])))
                 intel["phishingLinks"] = list(set(intel["phishingLinks"] + llm_intel.get("phishingLinks", [])))
+                intel["phoneNumbers"] = list(set(intel["phoneNumbers"] + llm_intel.get("phoneNumbers", [])))
+                intel["suspiciousKeywords"] = list(set(intel["suspiciousKeywords"] + llm_intel.get("suspiciousKeywords", [])))
                 intel["agentNotes"] = llm_intel.get("agentNotes", "Scammer is engaging.")
         except Exception as e:
             print(f"LLM intelligence extraction failed: {e}. Manual extraction used.")
             if "agentNotes" not in intel or not intel["agentNotes"]:
                 intel["agentNotes"] = "Manual extraction used due to API error or malformed LLM response."
 
-        # Final safety check: Ensure all keys required by ScamResponse schema are present
-        for key in ["bankAccounts", "upiIds", "phishingLinks"]:
+        # Final safety check: Ensure all keys required by GUVI schema are present
+        for key in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers", "suspiciousKeywords"]:
             if key not in intel:
                 intel[key] = []
         if "agentNotes" not in intel:

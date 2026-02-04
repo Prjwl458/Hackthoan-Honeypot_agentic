@@ -1,8 +1,9 @@
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
 import time
+import requests
 from datetime import datetime
 from dotenv import load_dotenv
 from agent import ScamAgent
@@ -21,7 +22,7 @@ API_KEY = os.getenv("YOUR_SECRET_API_KEY", "default_secret_key")
 class Message(BaseModel):
     sender: str
     text: str
-    timestamp: str
+    timestamp: int # Updated to Epoch time format in ms
 
 class Metadata(BaseModel):
     channel: Optional[str] = "SMS"
@@ -29,25 +30,21 @@ class Metadata(BaseModel):
     locale: Optional[str] = "IN"
 
 class ScamRequest(BaseModel):
+    sessionId: str # Mandatory sessionId
     message: Message
     conversationHistory: Optional[List[Message]] = Field(default_factory=list)
     metadata: Optional[Metadata] = None
-
-class EngagementMetrics(BaseModel):
-    engagementDurationSeconds: int
-    totalMessagesExchanged: int
 
 class ExtractedIntelligence(BaseModel):
     bankAccounts: List[str] = []
     upiIds: List[str] = []
     phishingLinks: List[str] = []
+    phoneNumbers: List[str] = []
+    suspiciousKeywords: List[str] = []
 
 class ScamResponse(BaseModel):
     status: str
-    scamDetected: bool
-    engagementMetrics: EngagementMetrics
-    extractedIntelligence: ExtractedIntelligence
-    agentNotes: str
+    reply: str # Updated response format
 
 # Security
 async def verify_api_key(x_api_key: str = Header(None)):
@@ -55,10 +52,23 @@ async def verify_api_key(x_api_key: str = Header(None)):
         raise HTTPException(status_code=403, detail="Invalid API Key")
     return x_api_key
 
+def send_guvi_callback(payload: dict):
+    """Background task to send intelligence to GUVI"""
+    try:
+        requests.post(
+            "https://hackathon.guvi.in/api/updateHoneyPotFinalResult",
+            json=payload,
+            timeout=10
+        )
+    except Exception as e:
+        print(f"GUVI Callback failed: {e}")
+
 @app.post("/message", response_model=ScamResponse)
-async def handle_message(request: ScamRequest, api_key: str = Depends(verify_api_key)):
-    start_time = time.time()
-    
+async def handle_message(
+    request: ScamRequest, 
+    background_tasks: BackgroundTasks,
+    api_key: str = Depends(verify_api_key)
+):
     # Convert conversation history to simple dict list for the agent
     history_list = [{"sender": m.sender, "text": m.text} for m in request.conversationHistory]
     
@@ -66,47 +76,35 @@ async def handle_message(request: ScamRequest, api_key: str = Depends(verify_api
     is_scam = agent.detect_scam(request.message.text, history_list)
     
     if not is_scam:
-        return ScamResponse(
-            status="success",
-            scamDetected=False,
-            engagementMetrics=EngagementMetrics(
-                engagementDurationSeconds=0,
-                totalMessagesExchanged=len(request.conversationHistory) + 1
-            ),
-            extractedIntelligence=ExtractedIntelligence(),
-            agentNotes="No scam detected."
-        )
+        return ScamResponse(status="success", reply="Hello! How can I help you today?")
 
     # 2. Extract Intelligence
     intel = agent.extract_intelligence(request.message.text, history_list)
     
     # 3. Generate Agent Response (Engagement)
-    # The requirement says "return a structured JSON response", 
-    # and the evaluation flow says "The Agent continues the conversation".
-    # Typically this means the response should include the agent's message.
-    # I'll add the agent's message to the agentNotes or a new field if allowed.
-    # Looking at the requirement "Expected Output Format", there's no "reply" field.
-    # However, to "engage", the system must produce a reply.
-    # I will put the reply in a logical place if not specified, 
-    # but I'll stick to the exact schema provided.
-    # Wait, the prompt says "Returns a structured JSON response" but doesn't explicitly show where the reply goes in the example.
-    # I'll include the reply in 'agentNotes' as part of the intelligence/notes.
-    
     agent_reply = agent.generate_response(request.message.text, history_list, request.metadata.model_dump() if request.metadata else {})
     
+    # 4. Mandatory Callback (Non-blocking via BackgroundTasks)
+    # Using Option 1: Live Updates for maximum data persistence.
+    callback_payload = {
+        "sessionId": request.sessionId,
+        "scamDetected": True,
+        "totalMessagesExchanged": len(request.conversationHistory) + 1, # Accurate count (History + Current)
+        "extractedIntelligence": {
+            "bankAccounts": intel.get("bankAccounts", []),
+            "upiIds": intel.get("upiIds", []), # camelCase validated
+            "phishingLinks": intel.get("phishingLinks", []), # camelCase validated
+            "phoneNumbers": intel.get("phoneNumbers", []),
+            "suspiciousKeywords": intel.get("suspiciousKeywords", [])
+        },
+        "agentNotes": intel.get("agentNotes", "Scammer engaged.")
+    }
+    
+    background_tasks.add_task(send_guvi_callback, callback_payload)
+
     return ScamResponse(
         status="success",
-        scamDetected=True,
-        engagementMetrics=EngagementMetrics(
-            engagementDurationSeconds=int(time.time() - start_time), # This is per-request duration in this context
-            totalMessagesExchanged=len(request.conversationHistory) + 1
-        ),
-        extractedIntelligence=ExtractedIntelligence(
-            bankAccounts=intel.get("bankAccounts", []),
-            upiIds=intel.get("upiIds", []),
-            phishingLinks=intel.get("phishingLinks", [])
-        ),
-        agentNotes=f"Agent Reply: {agent_reply}\n\nTactics: {intel.get('agentNotes', '')}"
+        reply=agent_reply
     )
 
 if __name__ == "__main__":
