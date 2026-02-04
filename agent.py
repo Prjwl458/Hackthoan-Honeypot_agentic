@@ -134,13 +134,19 @@ class ScamAgent:
             llm_response = self._call_llm_api(messages, response_as_json=True)
             content = llm_response["choices"][0]["message"]["content"].strip()
             
-            # Bulletproof Regex-based JSON extraction
-            # This finds the first { and last } to ignore any text the model might add outside the JSON
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            # Refined Regex-based JSON extraction
+            # This explicitly isolates the outermost JSON object
+            json_match = re.search(r'(\{.*\})', content, re.DOTALL)
             if json_match:
-                content = json_match.group(0)
+                content = json_match.group(1).strip()
 
-            llm_intel = json.loads(content)
+            try:
+                llm_intel = json.loads(content)
+            except json.JSONDecodeError as e:
+                print(f"JSON Decode Error: {e}")
+                print(f"RAW OUTPUT (Start): {content[:100]}...")
+                print(f"RAW OUTPUT (End): ...{content[-100:]}")
+                raise e
             # Merge with regex results, ensuring keys exist
             if isinstance(llm_intel, dict):
                 intel["bankAccounts"] = list(set(intel["bankAccounts"] + llm_intel.get("bankAccounts", [])))
