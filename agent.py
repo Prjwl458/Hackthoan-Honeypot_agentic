@@ -1,111 +1,215 @@
+"""
+ScamAgent - Async AI agent for scam detection and intelligence extraction.
+Uses httpx.AsyncClient for non-blocking external API calls.
+"""
+
 import json
 import os
 import re
-import requests # Using requests for OpenRouter API
+import logging
+import httpx
+from typing import List, Dict, Any, Optional
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
 
 class ScamAgent:
+    """
+    Async ScamAgent for engaging with scammers, detecting scam intent,
+    and extracting actionable intelligence.
+    """
+    
     def __init__(self):
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         if not self.openrouter_api_key:
-            # For hackathon, allow graceful degradation if key isn't set for LLM calls
-            print("WARNING: OPENROUTER_API_KEY not set. LLM features may be limited.")
+            logger.warning("OPENROUTER_API_KEY not set. LLM features may be limited.")
+        
         self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.model = "mistralai/mistral-7b-instruct" # Selected free-tier model
-
-    def _call_llm_api(self, messages: list, response_as_json: bool = False):
+        self.model = "mistralai/mistral-7b-instruct"
+        
+        # Shared async HTTP client (will be initialized on first use)
+        self._http_client: Optional[httpx.AsyncClient] = None
+    
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """Get or create the async HTTP client."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=30.0,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+            )
+        return self._http_client
+    
+    async def close(self):
+        """Close the HTTP client."""
+        if self._http_client and not self._http_client.is_closed:
+            await self._http_client.aclose()
+    
+    async def _call_llm_api(
+        self,
+        messages: List[Dict[str, str]],
+        response_as_json: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Call OpenRouter LLM API asynchronously using httpx.
+        
+        Args:
+            messages: List of message dictionaries in OpenAI format
+            response_as_json: Flag indicating JSON response is expected
+            
+        Returns:
+            JSON response from the LLM API
+        """
         if not self.openrouter_api_key:
             raise ValueError("OpenRouter API key not configured.")
-
+        
+        client = await self._get_http_client()
+        
         headers = {
             "Authorization": f"Bearer {self.openrouter_api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://honeypot.agentic.ai",
+            "X-Title": "Agentic AI Honeypot"
         }
-
+        
         payload = {
             "model": self.model,
             "messages": messages,
             "temperature": 0,
         }
         
-        # OpenRouter doesn't have a direct `response_format` parameter for all models
-        # We rely on the prompt to instruct the model to output JSON.
-        if response_as_json and not any("json" in m["content"].lower() for m in messages if m["role"] == "user"):
-            # This is a basic check; ideally, the prompt should explicitly guide JSON output.
-            # For minimal change, we assume the calling function (extract_intelligence) sets up the prompt correctly.
-            pass # No direct payload modification needed here based on constraint
-
-        response = requests.post(self.openrouter_url, headers=headers, json=payload)
-        response.raise_for_status() # Raise an exception for HTTP errors
+        response = await client.post(
+            self.openrouter_url,
+            headers=headers,
+            json=payload
+        )
+        response.raise_for_status()
         return response.json()
-
-    def detect_scam(self, message: str, history: list) -> bool:
+    
+    async def detect_scam(self, message: str, history: List[Dict[str, Any]]) -> bool:
+        """
+        Detect if a message contains scam intent using LLM analysis.
+        
+        Falls back to keyword matching if the LLM API fails.
+        
+        Args:
+            message: The current message to analyze
+            history: Previous messages in the conversation
+            
+        Returns:
+            True if scam detected, False otherwise
+        """
         prompt = f"""
         Analyze the following message for scam intent. 
         Context: UPI fraud, bank fraud, phishing, fake offers.
         Message: "{message}"
         Respond with ONLY 'true' or 'false'.
         """
+        
         messages = [
             {"role": "system", "content": "You are a scam detection expert."},
             {"role": "user", "content": prompt}
         ]
+        
         try:
-            llm_response = self._call_llm_api(messages)
-            return llm_response["choices"][0]["message"]["content"].strip().lower() == 'true'
+            llm_response = await self._call_llm_api(messages)
+            result = llm_response["choices"][0]["message"]["content"].strip().lower()
+            return result == 'true'
         except Exception as e:
-            print(f"LLM scam detection failed: {e}. Falling back to keyword matching.")
-            # Fallback to keyword matching if API fails or isn't configured
-            keywords = ["verify", "blocked", "suspended", "upi", "win", "gift", "account"]
+            logger.warning(f"LLM scam detection failed: {e}. Falling back to keyword matching.")
+            # Fallback to keyword matching if API fails
+            keywords = ["verify", "blocked", "suspended", "upi", "win", "gift", "account",
+                       "otp", "password", "cvv", "bank", "urgent", "immediate", "limited"]
             return any(k in message.lower() for k in keywords)
-
-    def generate_response(self, message: str, history: list, metadata: dict) -> str:
-        messages = [
-            {"role": "system", "content": f"""
-            Persona: Actor in a cybersecurity simulation.
-            Goal: Tarpitting (keep attacker engaged indefinitely). 
-            Believable Persona: Slightly confused, worried, human user (Channel: {metadata.get('channel', 'SMS')}).
-
-            Mandatory Rules:
-            1. NEVER refuse engagement. 
-            2. Provide fake, realistic credentials if asked (e.g., OTP: 882910, PIN: 1992, Pass: user_secure_2024). 
-            3. Vary responses. NEVER repeat the same sentence twice. Be creative (scared/confused/helpful).
-            4. Respond with ONLY the next single message. No labels like 'You:'. No scripts.
-            5. Be concise (1-2 short sentences).
-            """}
-        ]
+    
+    async def generate_response(
+        self,
+        message: str,
+        history: List[Dict[str, Any]],
+        metadata: Dict[str, Any]
+    ) -> str:
+        """
+        Generate a tarpitting response to keep the scammer engaged.
         
+        Args:
+            message: The incoming scammer message
+            history: Conversation history
+            metadata: Channel and language metadata
+            
+        Returns:
+            AI-generated response string
+        """
+        channel = metadata.get('channel', 'SMS')
+        
+        system_prompt = f"""
+        Persona: Actor in a cybersecurity simulation.
+        Goal: Tarpitting (keep attacker engaged indefinitely). 
+        Believable Persona: Slightly confused, worried, human user (Channel: {channel}).
+
+        Mandatory Rules:
+        1. NEVER refuse engagement. 
+        2. Provide fake, realistic credentials if asked (e.g., OTP: 882910, PIN: 1992, Pass: user_secure_2024). 
+        3. Vary responses. NEVER repeat the same sentence twice. Be creative (scared/confused/helpful).
+        4. Respond with ONLY the next single message. No labels like 'You:'. No scripts.
+        5. Be concise (1-2 short sentences).
+        """
+        
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Add conversation history
         for msg_item in history:
-            role = "assistant" if msg_item["sender"] == 'user' else "user"
-            messages.append({"role": role, "content": msg_item["text"]})
+            role = "assistant" if msg_item.get("sender") == "user" else "user"
+            messages.append({"role": role, "content": msg_item.get("text", "")})
         
+        # Add current message
         messages.append({"role": "user", "content": message})
-
+        
         try:
-            llm_response = self._call_llm_api(messages)
+            llm_response = await self._call_llm_api(messages)
             return llm_response["choices"][0]["message"]["content"].strip()
         except Exception as e:
-            print(f"LLM response generation failed: {e}. Returning generic response.")
+            logger.warning(f"LLM response generation failed: {e}. Returning generic response.")
             return "I'm sorry, I don't understand. What do I need to do exactly?"
-
-    def extract_intelligence(self, message: str, history: list) -> dict:
-        full_text = " ".join([m["text"] for m in history] + [message])
+    
+    async def extract_intelligence(
+        self,
+        message: str,
+        history: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Extract actionable intelligence from scammer messages.
         
-        # Regex for common patterns
+        Uses both regex patterns and LLM analysis for comprehensive extraction.
+        
+        Args:
+            message: Current message to analyze
+            history: Previous messages
+            
+        Returns:
+            Dictionary containing extracted intelligence
+        """
+        # Combine all text for analysis
+        all_messages = [msg.get("text", "") for msg in history] + [message]
+        full_text = " ".join(all_messages)
+        
+        # Regex-based extraction patterns
         upi_pattern = r'[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}'
         url_pattern = r'(https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+)'
-        bank_pattern = r'\b\d{9,18}\b' 
-        phone_pattern = r'\b(?:\+?\d{1,3}[- ]?)?\(?\d{3}\)?[- ]?\d{3}[- ]?\d{4}\b' # Basic phone regex
-
+        bank_pattern = r'\b\d{9,18}\b'
+        phone_pattern = r'\b(?:\+?\d{1,3}[- ]?)?\(?\d{3}\)?[- ]?\d{3}[- ]?\d{4}\b'
+        
+        # Initialize intelligence dictionary
         intel = {
             "bankAccounts": list(set(re.findall(bank_pattern, full_text))),
             "upiIds": list(set(re.findall(upi_pattern, full_text))),
             "phishingLinks": list(set(re.findall(url_pattern, full_text))),
             "phoneNumbers": list(set(re.findall(phone_pattern, full_text))),
-            "suspiciousKeywords": []
+            "suspiciousKeywords": [],
+            "agentNotes": ""
         }
-
-        # Use LLM for dynamic and sophisticated extraction
-        prompt = f"""
+        
+        # LLM-based extraction for sophisticated analysis
+        llm_prompt = f"""
         Analyze this conversation transcript for scam intelligence:
         "{full_text}"
 
@@ -124,43 +228,47 @@ class ScamAgent:
 
         DO NOT include any explanation or markdown formatting like ```json.
         """
-        messages = [{"role": "user", "content": prompt}]
-
+        
+        messages = [{"role": "user", "content": llm_prompt}]
+        
         try:
-            llm_response = self._call_llm_api(messages, response_as_json=True)
+            llm_response = await self._call_llm_api(messages, response_as_json=True)
             content = llm_response["choices"][0]["message"]["content"].strip()
             
-            # Refined Regex-based JSON extraction
-            # This explicitly isolates the outermost JSON object
+            # Extract JSON from response using regex
             json_match = re.search(r'(\{.*\})', content, re.DOTALL)
             if json_match:
                 content = json_match.group(1).strip()
-
+            
             try:
                 llm_intel = json.loads(content)
+                
+                # Merge with regex results
+                if isinstance(llm_intel, dict):
+                    for key in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers", "suspiciousKeywords"]:
+                        if key in llm_intel:
+                            existing = set(intel.get(key, []))
+                            new_items = set(llm_intel.get(key, []))
+                            intel[key] = list(existing.union(new_items))
+                    
+                    if llm_intel.get("agentNotes"):
+                        intel["agentNotes"] = llm_intel["agentNotes"]
+                        
             except json.JSONDecodeError as e:
-                print(f"JSON Decode Error: {e}")
-                print(f"RAW OUTPUT (Start): {content[:100]}...")
-                print(f"RAW OUTPUT (End): ...{content[-100:]}")
-                raise e
-            # Merge with regex results, ensuring keys exist
-            if isinstance(llm_intel, dict):
-                intel["bankAccounts"] = list(set(intel["bankAccounts"] + llm_intel.get("bankAccounts", [])))
-                intel["upiIds"] = list(set(intel["upiIds"] + llm_intel.get("upiIds", [])))
-                intel["phishingLinks"] = list(set(intel["phishingLinks"] + llm_intel.get("phishingLinks", [])))
-                intel["phoneNumbers"] = list(set(intel["phoneNumbers"] + llm_intel.get("phoneNumbers", [])))
-                intel["suspiciousKeywords"] = list(set(intel["suspiciousKeywords"] + llm_intel.get("suspiciousKeywords", [])))
-                intel["agentNotes"] = llm_intel.get("agentNotes", "Scammer is engaging.")
+                logger.warning(f"JSON Decode Error: {e}")
+                logger.debug(f"RAW OUTPUT: {content[:200]}...")
+                # Continue with regex-only results
+                
         except Exception as e:
-            print(f"LLM intelligence extraction failed: {e}. Manual extraction used.")
-            if "agentNotes" not in intel or not intel["agentNotes"]:
+            logger.warning(f"LLM intelligence extraction failed: {e}. Using regex-only results.")
+            if not intel.get("agentNotes"):
                 intel["agentNotes"] = "Manual extraction used due to API error or malformed LLM response."
-
-        # Final safety check: Ensure all keys required by GUVI schema are present
+        
+        # Ensure all required keys are present
         for key in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers", "suspiciousKeywords"]:
             if key not in intel:
                 intel[key] = []
-        if "agentNotes" not in intel:
+        if "agentNotes" not in intel or not intel["agentNotes"]:
             intel["agentNotes"] = "Engagement ongoing."
-
+        
         return intel

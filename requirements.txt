@@ -2,4 +2,9 @@ fastapi
 uvicorn[standard]
 pydantic
 python-dotenv
-requests
+httpx>=0.25.0
+motor>=3.3.0
+pymongo>=4.9,<5.0
+dnspython>=2.6.0
+
+# Python 3.11+ required

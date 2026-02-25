@@ -4,7 +4,7 @@ import time
 
 url = "http://127.0.0.1:8000/"
 headers = {
-    "x-api-key": "prajwal_hackathon_key_2310",
+    "x-api-key": "test_key_for_ci",
     "Content-Type": "application/json"
 }
 
