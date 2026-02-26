@@ -122,11 +122,11 @@ class IntelligenceData(BaseModel):
     phishingLinks: List[str] = Field(default_factory=list)
     phoneNumbers: List[str] = Field(default_factory=list)
     suspiciousKeywords: List[str] = Field(default_factory=list)
-    agentNotes: str = Field(default="")
-    # New enhanced fields
-    scamType: str = Field(default="Unknown")
-    urgencyLevel: str = Field(default="Low")
-    riskScore: int = Field(default=10)
+    agentNotes: str = ""
+    # Enhanced fields with explicit defaults
+    scamType: str = "Unknown"
+    urgencyLevel: str = "Low"
+    riskScore: int = 0
     extractedEntities: List[str] = Field(default_factory=list)
     
     class Config:

@@ -140,47 +140,49 @@ class ScamAgent:
         metadata: Dict[str, Any]
     ) -> str:
         """
-        Generate a tarpitting response to keep the scammer engaged.
+        Generate a short professional Summary Verdict for the scanner app.
         
         Args:
-            message: The incoming scammer message
+            message: The incoming message to analyze
             history: Conversation history
             metadata: Channel and language metadata
             
         Returns:
-            AI-generated response string
+            Short professional verdict string (e.g., 'Phishing attempt targeting HDFC users via UPI')
         """
-        channel = metadata.get('channel', 'SMS')
+        # Build context from history
+        all_messages = [msg.get("text", "") for msg in history] + [message]
+        full_text = " ".join(all_messages)
         
-        system_prompt = f"""
-        Persona: Actor in a cybersecurity simulation.
-        Goal: Tarpitting (keep attacker engaged indefinitely). 
-        Believable Persona: Slightly confused, worried, human user (Channel: {channel}).
-
-        Mandatory Rules:
-        1. NEVER refuse engagement. 
-        2. Provide fake, realistic credentials if asked (e.g., OTP: 882910, PIN: 1992, Pass: user_secure_2024). 
-        3. Vary responses. NEVER repeat the same sentence twice. Be creative (scared/confused/helpful).
-        4. Respond with ONLY the next single message. No labels like 'You:'. No scripts.
-        5. Be concise (1-2 short sentences).
+        llm_prompt = f"""
+        You are a Professional Security Analyst.
+        Analyze this message and provide a Summary Verdict (MAX 15 WORDS).
+        
+        Message: "{full_text}"
+        
+        Rules:
+        1. STRICTLY MAX 15 WORDS
+        2. Format: "[Threat Type] - [Target/Description]"
+        3. Examples:
+           - "Phishing - HDFC account compromise attempt via OTP"
+           - "Lottery scam - fake prize claim requesting bank details"
+           - "Tech support - false account suspension warning"
+           - "Safe - No malicious content detected"
+           - "Neutral - Analysis inconclusive"
+        4. NO conversational filler (no 'Hello', no 'I think', no 'In my opinion')
+        5. Be direct and professional
+        
+        Return ONLY the summary verdict. No explanation.
         """
         
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # Add conversation history
-        for msg_item in history:
-            role = "assistant" if msg_item.get("sender") == "user" else "user"
-            messages.append({"role": role, "content": msg_item.get("text", "")})
-        
-        # Add current message
-        messages.append({"role": "user", "content": message})
+        messages = [{"role": "user", "content": llm_prompt}]
         
         try:
             llm_response = await self._call_llm_api(messages)
             return llm_response["choices"][0]["message"]["content"].strip()
         except Exception as e:
-            logger.warning(f"LLM response generation failed: {e}. Returning generic response.")
-            return "I'm sorry, I don't understand. What do I need to do exactly?"
+            logger.warning(f"LLM verdict generation failed: {e}. Returning default.")
+            return "Neutral - Analysis inconclusive due to system error"
     
     async def extract_intelligence(
         self,

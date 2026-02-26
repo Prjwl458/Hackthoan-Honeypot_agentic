@@ -247,16 +247,7 @@ async def handle_message(
     )
     
     try:
-        # Step 1: Detect scam intent
-        is_scam = await agent.detect_scam(message_text, history)
-        
-        if not is_scam:
-            return HoneypotResponse(
-                status="success",
-                reply="Hello! How can I help you today?"
-            )
-        
-        # Step 2: Extract intelligence and generate response (with timeout)
+        # Step 1: Extract intelligence and generate verdict (ALWAYS - for all requests)
         try:
             intel, reply = await asyncio.wait_for(
                 asyncio.gather(
@@ -267,17 +258,21 @@ async def handle_message(
             )
         except asyncio.TimeoutError:
             logger.warning("AI processing timed out, using fallback")
-            reply = "I'm not sure I understand. Could you please explain what I need to do?"
+            reply = "Neutral - Analysis inconclusive due to timeout"
             intel = {
                 "bankAccounts": [],
                 "upiIds": [],
                 "phishingLinks": [],
                 "phoneNumbers": [],
                 "suspiciousKeywords": [],
-                "agentNotes": "Processing timed out"
+                "agentNotes": "Processing timed out",
+                "scamType": "Unknown",
+                "urgencyLevel": "Low",
+                "riskScore": 0,
+                "extractedEntities": []
             }
         
-        # Step 3: Update database with extracted intelligence
+        # Step 2: Update database with extracted intelligence
         # (initial save already done at top for audit logging)
         await db_manager.update_conversation(
             session_id=request.get_session_id(),
@@ -285,39 +280,58 @@ async def handle_message(
             intelligence=intel
         )
         
-        # Step 4: Prepare callback payload
+        # Step 3: Prepare callback payload
         ext_intel = IntelligenceData(
             bankAccounts=intel.get("bankAccounts", []),
             upiIds=intel.get("upiIds", []),
             phishingLinks=intel.get("phishingLinks", []),
             phoneNumbers=intel.get("phoneNumbers", []),
             suspiciousKeywords=intel.get("suspiciousKeywords", []),
-            agentNotes=intel.get("agentNotes", "")
+            agentNotes=intel.get("agentNotes", ""),
+            scamType=intel.get("scamType", "Unknown"),
+            urgencyLevel=intel.get("urgencyLevel", "Low"),
+            riskScore=intel.get("riskScore", 0),
+            extractedEntities=intel.get("extractedEntities", [])
         )
         
-        callback_payload = {
-            "sessionId": request.get_session_id(),
-            "scamDetected": True,
-            "totalMessagesExchanged": len(history) + 1,
-            "extractedIntelligence": ext_intel.model_dump(),
-            "agentNotes": intel.get("agentNotes", "Scammer engaged.")
-        }
+        # Only send callback if scam detected
+        is_scam = intel.get("riskScore", 0) > 30
+        if is_scam:
+            callback_payload = {
+                "sessionId": request.get_session_id(),
+                "scamDetected": True,
+                "totalMessagesExchanged": len(history) + 1,
+                "extractedIntelligence": ext_intel.model_dump(),
+                "agentNotes": intel.get("agentNotes", "Scammer engaged.")
+            }
+            background_tasks.add_task(send_guvi_callback_async, request.get_session_id(), callback_payload)
         
-        # Step 5: Send non-blocking callback
-        background_tasks.add_task(send_guvi_callback_async, request.get_session_id(), callback_payload)
-        
+        # Step 4: Return response with full intelligence (ALWAYS)
         return HoneypotResponse(
             status="success",
-            reply=reply,
+            reply=reply,  # This is now the Summary Verdict
             intelligence=intel
         )
         
     except Exception as e:
         logger.exception(f"Error processing request: {e}")
-        # Don't let errors break the engagement - return fallback response
+        # Return neutral intelligence with explicit defaults for API consistency
+        neutral_intel = {
+            "bankAccounts": [],
+            "upiIds": [],
+            "phishingLinks": [],
+            "phoneNumbers": [],
+            "suspiciousKeywords": [],
+            "agentNotes": "System error - neutral classification",
+            "scamType": "Unknown",
+            "urgencyLevel": "Low",
+            "riskScore": 0,
+            "extractedEntities": []
+        }
         return HoneypotResponse(
             status="success",
-            reply="I'm having some trouble connecting. Please try again in a moment."
+            reply="Neutral - Analysis inconclusive due to system error",
+            intelligence=neutral_intel
         )
 
 
