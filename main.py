@@ -94,13 +94,24 @@ DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
     """Handle Pydantic validation errors."""
-    logger.warning(f"Validation error: {exc.errors()}")
+    # Convert any non-serializable objects to strings
+    def convert_to_serializable(obj):
+        if isinstance(obj, bytes):
+            return obj.decode('utf-8', errors='ignore')
+        if isinstance(obj, dict):
+            return {k: convert_to_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [convert_to_serializable(i) for i in obj]
+        return obj
+    
+    errors = convert_to_serializable(exc.errors())
+    logger.warning(f"Validation error: {errors}")
     return JSONResponse(
         status_code=422,
         content={
             "status": "error",
             "error": "Validation error",
-            "details": exc.errors()
+            "details": errors
         }
     )
 
