@@ -102,9 +102,18 @@ class ScamAgent:
             True if scam detected, False otherwise
         """
         prompt = f"""
-        Analyze the following message for scam intent. 
-        Context: UPI fraud, bank fraud, phishing, fake offers.
+        You are a SECURITY EXPERT specializing in scam detection.
+        
+        CRITICAL RULES:
+        - If the message contains ANY of the following, ALWAYS respond with 'true':
+          * Links, URLs, or website addresses
+          * Urgency words: "urgent", "immediately", "now", "limited time", "act now"
+          * Money-related: "bank", "account", "upi", "pay", "transfer", "gift", "win", "prize"
+          * PII requests: "otp", "password", "cvv", "pin", "card details"
+          * Suspicious offers: "won", "selected", "congratulations", "verify your account"
+        
         Message: "{message}"
+        
         Respond with ONLY 'true' or 'false'.
         """
         

@@ -232,6 +232,20 @@ async def handle_message(
     history = request.get_conversation_history()
     metadata = request.metadata or {}
     
+    # AUDIT LOGGING: Save EVERY request to database immediately
+    # This ensures we capture all incoming messages for debugging/analysis
+    new_message = {
+        "sender": message_data.get("sender", "user") if isinstance(message_data, dict) else getattr(message_data, "sender", "user"),
+        "text": message_text,
+        "timestamp": message_data.get("timestamp", 0) if isinstance(message_data, dict) else getattr(message_data, "timestamp", 0)
+    }
+    
+    await db_manager.update_conversation(
+        session_id=request.get_session_id(),
+        new_messages=[new_message],
+        intelligence={"bankAccounts": [], "upiIds": [], "phishingLinks": [], "phoneNumbers": [], "suspiciousKeywords": [], "agentNotes": ""}
+    )
+    
     try:
         # Step 1: Detect scam intent
         is_scam = await agent.detect_scam(message_text, history)
@@ -263,16 +277,11 @@ async def handle_message(
                 "agentNotes": "Processing timed out"
             }
         
-        # Step 3: Save to database (with fallback to in-memory)
-        new_message = {
-            "sender": message_data.get("sender", "user") if isinstance(message_data, dict) else getattr(message_data, "sender", "user"),
-            "text": message_text,
-            "timestamp": message_data.get("timestamp", 0) if isinstance(message_data, dict) else getattr(message_data, "timestamp", 0)
-        }
-        
+        # Step 3: Update database with extracted intelligence
+        # (initial save already done at top for audit logging)
         await db_manager.update_conversation(
             session_id=request.get_session_id(),
-            new_messages=[new_message],
+            new_messages=[],
             intelligence=intel
         )
         

@@ -195,7 +195,8 @@ class DatabaseManager:
                 },
                 "messageCount": 0
             }
-            await self.db.scam_logs.insert_one(conversation_doc)
+            result = await self.db.scam_logs.insert_one(conversation_doc)
+            print(f"DEBUG: Document inserted with ID: {result.inserted_id}")
             return True
         except Exception as e:
             logger.error(f"Error saving conversation: {e}")
