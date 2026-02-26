@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 """
 FastAPI application entry point for Agentic AI Honeypot.
 Production-ready with async HTTP, database integration, and global error handling.
@@ -16,14 +19,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
-from dotenv import load_dotenv
 
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
 from database import db_manager
 from agent import ScamAgent
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -172,10 +171,12 @@ async def send_guvi_callback_async(session_id: str, payload: dict):
 @app.get("/")
 async def root():
     """Health check endpoint."""
+    db_status = "connected" if db_manager._connection_verified and not db_manager._use_in_memory else "fallback"
     return {
         "status": "success",
         "service": "Agentic AI Honeypot",
-        "version": "2.0.0"
+        "version": "2.0.0",
+        "database": db_status
     }
 
 

@@ -1,36 +1,100 @@
-🛡️ Agentic AI Honeypot: Real-Time Scam Intelligence
-A high-performance, asynchronous AI agent designed to engage with scammers, analyze their intent, and extract actionable intelligence (UPI IDs, Bank Accounts, Phishing Links) in real-time.
+# 🛡️ Agentic AI Honeypot
 
-🚀 Key Features
-Instant Engagement: Uses an asynchronous architecture to respond to scammers in under 1 second.
-Deep Intelligence Extraction: Leverages LLMs to identify scammer pressure tactics and extract financial entities.
-Resilience Engine: Implements "Strict JSON Isolation" to handle malformed or conversational AI outputs without system failure.
-Automated Callback: Real-time reporting of captured data to security platforms via secure webhooks.
-Cloud Ready: Fully containerized logic ready for deployment on platforms like Render.
+A production-ready, asynchronous AI agent designed to engage with scammers, analyze their intent, and extract actionable intelligence in real-time.
 
-🛠️ Technical Stack
-Core: Python 3.10+ & FastAPI
-AI: OpenRouter / LLM (GPT-4o/Claude 3.5)
-Concurrency: BackgroundTasks for non-blocking processing.
-Deployment: Render + GitHub CI/CD
+## 🚀 Features
 
-🏗️ System Architecture
-The system is designed to be "fail-safe." Even if the AI provides a talkative response or the external platform is slow, the honeypot remains online and functional.
-Request Handler: Receives the scammer's message and immediately returns a generated reply.
-Intelligence Layer: In the background, the LLM analyzes the message for entities.
-Extraction Logic: A custom regex-based isolation engine filters raw text into structured JSON.
-Reporting: The final intelligence payload is sent to the target callback URL.
+- **Async Architecture**: Non-blocking FastAPI with httpx for high-performance concurrent requests
+- **Intelligence Extraction**: LLM-powered analysis to identify UPI IDs, bank accounts, phishing links, and phone numbers
+- **Tarpitting Strategy**: Keeps scammers engaged with realistic, varied responses
+- **Database Persistence**: MongoDB Atlas with in-memory fallback for resilience
+- **Production Ready**: Pydantic validation, global error handling, structured logging
 
-🧪 Testing Results (Final Output)
-The system was validated against high-pressure phishing scenarios. Below is a sample of a successful extraction during a simulated SBI scam attempt:
+## 🛠️ Tech Stack
 
-JSON
+- **Framework**: FastAPI + Python 3.11+
+- **AI**: OpenRouter (Llama 3.1)
+- **Database**: MongoDB Atlas (Motor async driver)
+- **Deployment**: Render
+
+## 📋 Environment Variables
+
+Create a `.env` file:
+
+```env
+# API Security
+API_KEY=your_api_key_here
+
+# LLM Configuration
+OPENROUTER_API_KEY=sk-or-v1-...
+
+# Database (optional - uses in-memory fallback if not set)
+MONGODB_URI=mongodb+srv://...
+
+# Callback URL (optional)
+GUVI_CALLBACK_URL=https://your-callback-url.com
+```
+
+## 🏃 Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run locally
+uvicorn main:app --reload
+
+# Deploy to Render
+# Set environment variables in Render dashboard
+```
+
+## 📡 API Endpoints
+
+### Health Check
+```bash
+GET /
+```
+
+### Process Message
+```bash
+POST / -H "x-api-key: YOUR_API_KEY"
+```
+
+Request body:
+```json
 {
-  "scamDetected": true,
-  "extractedIntelligence": {
-    "bankAccounts": ["SBI"],
-    "suspiciousKeywords": ["URGENT", "blocked in 2 hours", "OTP", "account number"]
+  "sessionId": "unique-session-id",
+  "message": {
+    "sender": "scammer",
+    "text": "Your bank account is blocked! Pay now.",
+    "timestamp": 1234567890
   },
-  "agentNotes": "The message is a classic phishing scam intent on creating urgency to extract sensitive financial data."
+  "conversationHistory": [],
+  "metadata": {
+    "channel": "SMS",
+    "language": "English"
+  }
 }
+```
 
+## 📁 Project Structure
+
+```
+├── main.py          # FastAPI application entry point
+├── agent.py         # ScamAgent for AI processing
+├── database.py      # MongoDB connection manager
+├── models.py        # Pydantic schemas
+├── requirements.txt # Python dependencies
+└── .env.example    # Environment template
+```
+
+## 🔒 Security
+
+- All secrets stored in environment variables
+- No hardcoded API keys
+- CORS configured for production
+- Input validation with Pydantic
+
+## 📄 License
+
+MIT License

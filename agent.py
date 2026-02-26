@@ -26,7 +26,7 @@ class ScamAgent:
             logger.warning("OPENROUTER_API_KEY not set. LLM features may be limited.")
         
         self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.model = "mistralai/mistral-7b-instruct"
+        self.model = "meta-llama/Llama-3.1-8B-Instruct"
         
         # Shared async HTTP client (will be initialized on first use)
         self._http_client: Optional[httpx.AsyncClient] = None
@@ -83,6 +83,8 @@ class ScamAgent:
             headers=headers,
             json=payload
         )
+        if response.status_code != 200:
+            logger.error(f"OpenRouter API error: {response.status_code} - {response.text}")
         response.raise_for_status()
         return response.json()
     

@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 """
 MongoDB database layer using Motor async driver.
 Includes fallback to in-memory storage if MongoDB is unreachable.
@@ -5,13 +8,11 @@ Includes fallback to in-memory storage if MongoDB is unreachable.
 
 import os
 import logging
+import certifi
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,9 @@ class DatabaseManager:
             self.client = AsyncIOMotorClient(
                 self.mongodb_uri,
                 serverSelectionTimeoutMS=5000,  # 5 second timeout
-                connectTimeoutMS=5000
+                connectTimeoutMS=5000,
+                tls=True,
+                tlsInsecure=True  # Bypass SSL verification for local network/firewall issues
             )
             # Verify connection by pinging
             await self.client.admin.command("ping")
