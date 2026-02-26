@@ -234,8 +234,16 @@ async def handle_message(
     
     # AUDIT LOGGING: Save EVERY request to database immediately
     # This ensures we capture all incoming messages for debugging/analysis
+    # Get sender_id for SMS sender verification
+    sender_id = None
+    if isinstance(message_data, dict):
+        sender_id = message_data.get("sender_id") or message_data.get("senderId")
+    else:
+        sender_id = getattr(message_data, "sender_id", None) or getattr(message_data, "senderId", None)
+    
     new_message = {
         "sender": message_data.get("sender", "user") if isinstance(message_data, dict) else getattr(message_data, "sender", "user"),
+        "sender_id": sender_id,
         "text": message_text,
         "timestamp": message_data.get("timestamp", 0) if isinstance(message_data, dict) else getattr(message_data, "timestamp", 0)
     }
@@ -251,7 +259,7 @@ async def handle_message(
         try:
             intel, reply = await asyncio.wait_for(
                 asyncio.gather(
-                    agent.extract_intelligence(message_text, history),
+                    agent.extract_intelligence(message_text, history, sender_id),
                     agent.generate_response(message_text, history, metadata)
                 ),
                 timeout=8.0

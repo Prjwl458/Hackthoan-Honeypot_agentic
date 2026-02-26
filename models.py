@@ -14,6 +14,8 @@ class MessageContent(BaseModel):
     type: str = Field(default="text", description="Message type: text, image, etc.")
     timestamp: int = Field(..., description="Unix timestamp in milliseconds")
     sender: str = Field(default="user", description="Message sender: scammer, user, honeypot")
+    sender_id: Optional[str] = Field(default=None, validation_alias='sender_id', description="Sender's phone number or ID (e.g., +91xxxxxxxxxx)")
+    senderId: Optional[str] = Field(default=None, validation_alias='senderId', description="Sender's phone number or ID")
     
     @field_validator('text', 'content', mode='before')
     @classmethod
@@ -31,6 +33,10 @@ class MessageContent(BaseModel):
     def get_text(self) -> str:
         """Get the message text, preferring text over content."""
         return self.text or self.content or ""
+    
+    def get_sender_id(self) -> Optional[str]:
+        """Get sender ID (phone number), preferring sender_id over senderId."""
+        return self.sender_id or self.senderId
     
     class Config:
         extra = "allow"

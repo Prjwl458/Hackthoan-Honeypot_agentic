@@ -187,7 +187,8 @@ class ScamAgent:
     async def extract_intelligence(
         self,
         message: str,
-        history: List[Dict[str, Any]]
+        history: List[Dict[str, Any]],
+        sender_id: str = None
     ) -> Dict[str, Any]:
         """
         Extract actionable intelligence from scammer messages.
@@ -227,10 +228,16 @@ class ScamAgent:
         }
         
         # LLM-based extraction for sophisticated analysis
+        # Check sender mismatch if sender_id provided
+        sender_check = f"""
+        Sender Phone/ID: {sender_id}
+        """ if sender_id else ""
+        
         llm_prompt = f"""
         Analyze this conversation transcript for scam intelligence:
         "{full_text}"
-
+        {sender_check}
+        
         Your tasks:
         1. Identify Intent: Is the scammer trying to create urgency, ask for sensitive data, or offering something too good to be true?
         2. Generic Extraction: Extract any names of banks, financial apps (like UPI, WhatsApp, YONO), or specific types of sensitive data requested (OTP, CVV, PIN, passwords).
@@ -238,6 +245,11 @@ class ScamAgent:
         4. Classify Scam Type: Choose ONE from: Phishing, Lottery, Tech Support, Investment, Romance, Other
         5. Assess Urgency: Rate as Low, Medium, or High based on time pressure words
         6. Calculate Risk Score: Rate 1-100 based on danger level (higher = more dangerous)
+        7. SENDER VERIFICATION (IMPORTANT): If sender_id is provided, check if it matches the content:
+           - If message mentions "Bank" but sender is personal number (not official bank shortcode), ADD 20 to riskScore
+           - If message claims to be from "HDFC/ICICI/SBI" but sender is regular number, ADD 20 to riskScore
+           - If sender looks like personal phone (+91xxx) but claims institutional affiliation, ADD 15 to riskScore
+           - Note this in agentNotes
 
         Return ONLY a raw JSON object with these exact keys: 
         bankAccounts (list), 
