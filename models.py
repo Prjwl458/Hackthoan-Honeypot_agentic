@@ -3,16 +3,34 @@ Pydantic models for request/response validation.
 Ensures clean and predictable API for mobile app integration.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any, Union
 
 
 class MessageContent(BaseModel):
     """Individual message content structure."""
-    content: str = Field(..., description="Message text content")
+    text: Optional[str] = Field(default=None, validation_alias='text', description="Message text content")
+    content: Optional[str] = Field(default=None, validation_alias='content', description="Message text content")
     type: str = Field(default="text", description="Message type: text, image, etc.")
     timestamp: int = Field(..., description="Unix timestamp in milliseconds")
     sender: str = Field(default="user", description="Message sender: scammer, user, honeypot")
+    
+    @field_validator('text', 'content', mode='before')
+    @classmethod
+    def merge_text_content(cls, v, info):
+        if v is not None:
+            return v
+        # If neither text nor content is provided, check the other field
+        data = info.data
+        if info.field_name == 'text' and 'content' in data:
+            return data['content']
+        if info.field_name == 'content' and 'text' in data:
+            return data['text']
+        return v
+    
+    def get_text(self) -> str:
+        """Get the message text, preferring text over content."""
+        return self.text or self.content or ""
     
     class Config:
         extra = "allow"
@@ -20,7 +38,8 @@ class MessageContent(BaseModel):
 
 class ConversationMessage(BaseModel):
     """Historical conversation message."""
-    content: str
+    text: Optional[str] = Field(default=None)
+    content: Optional[str] = Field(default=None)
     type: str = "text"
     timestamp: int
     sender: str = "user"
@@ -31,32 +50,56 @@ class ConversationMessage(BaseModel):
 
 class HoneypotRequest(BaseModel):
     """Incoming request schema for honeypot engagement."""
-    session_id: Optional[str] = Field(default=None, description="Unique session identifier (snake_case)")
-    sessionId: Optional[str] = Field(default=None, description="Unique session identifier (camelCase)")
+    session_id: Optional[str] = Field(default=None, validation_alias='session_id', description="Unique session identifier")
+    sessionId: Optional[str] = Field(default=None, validation_alias='sessionId', description="Unique session identifier")
     message: Union[Dict[str, Any], MessageContent] = Field(..., description="Current incoming message")
     conversation_history: Optional[List[Dict[str, Any]]] = Field(
-        default_factory=list,
-        description="Array of previous messages (snake_case)"
+        default=None,
+        validation_alias='conversation_history',
+        description="Array of previous messages"
     )
     conversationHistory: Optional[List[Dict[str, Any]]] = Field(
-        default_factory=list,
-        description="Array of previous messages (camelCase)"
+        default=None,
+        validation_alias='conversationHistory',
+        description="Array of previous messages"
     )
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional metadata for future app data"
     )
     
-    class Config:
-        extra = "allow"
+    @field_validator('session_id', 'sessionId', mode='before')
+    @classmethod
+    def merge_session_ids(cls, v, info):
+        if v is not None:
+            return v
+        data = info.data
+        if info.field_name == 'session_id' and 'sessionId' in data:
+            return data['sessionId']
+        if info.field_name == 'sessionId' and 'session_id' in data:
+            return data['session_id']
+        return v
+    
+    @field_validator('conversation_history', 'conversationHistory', mode='before')
+    @classmethod
+    def merge_conversation_history(cls, v, info):
+        if v is not None:
+            return v
+        data = info.data
+        if info.field_name == 'conversation_history' and 'conversationHistory' in data:
+            return data['conversationHistory']
+        if info.field_name == 'conversationHistory' and 'conversation_history' in data:
+            return data['conversation_history']
+        return v
     
     def get_session_id(self) -> str:
-        """Get session_id preferring snake_case, fallback to camelCase."""
         return self.session_id or self.sessionId or ""
     
     def get_conversation_history(self) -> List[Dict[str, Any]]:
-        """Get conversation history preferring snake_case, fallback to camelCase."""
         return self.conversation_history or self.conversationHistory or []
+    
+    class Config:
+        extra = "allow"
 
 
 class HoneypotResponse(BaseModel):
@@ -74,51 +117,24 @@ class HoneypotResponse(BaseModel):
 
 class IntelligenceData(BaseModel):
     """Extracted intelligence from scammer messages."""
-    bank_accounts: List[str] = Field(
-        default_factory=list,
-        description="Extracted bank account numbers"
-    )
-    upi_ids: List[str] = Field(
-        default_factory=list,
-        description="Extracted UPI payment IDs"
-    )
-    phishing_links: List[str] = Field(
-        default_factory=list,
-        description="Extracted suspicious URLs"
-    )
-    phone_numbers: List[str] = Field(
-        default_factory=list,
-        description="Extracted phone numbers"
-    )
-    suspicious_keywords: List[str] = Field(
-        default_factory=list,
-        description="Identified pressure words or phrases"
-    )
-    agent_notes: str = Field(
-        default="",
-        description="AI-generated summary of scam intent"
-    )
-    
-    # Aliases for camelCase compatibility
-    bankAccounts: List[str] = Field(default_factory=list, alias="bankAccounts")
-    upiIds: List[str] = Field(default_factory=list, alias="upiIds")
-    phishingLinks: List[str] = Field(default_factory=list, alias="phishingLinks")
-    phoneNumbers: List[str] = Field(default_factory=list, alias="phoneNumbers")
-    suspiciousKeywords: List[str] = Field(default_factory=list, alias="suspiciousKeywords")
-    agentNotes: str = Field(default="", alias="agentNotes")
+    bankAccounts: List[str] = Field(default_factory=list)
+    upiIds: List[str] = Field(default_factory=list)
+    phishingLinks: List[str] = Field(default_factory=list)
+    phoneNumbers: List[str] = Field(default_factory=list)
+    suspiciousKeywords: List[str] = Field(default_factory=list)
+    agentNotes: str = Field(default="")
     
     class Config:
-        populate_by_name = True
         extra = "allow"
 
 
 class CallbackPayload(BaseModel):
     """Payload sent to external webhook (GUVI)."""
-    session_id: str
-    scam_detected: bool
-    total_messages_exchanged: int
-    extracted_intelligence: IntelligenceData
-    agent_notes: str = ""
+    sessionId: str
+    scamDetected: bool
+    totalMessagesExchanged: int
+    extractedIntelligence: IntelligenceData
+    agentNotes: str = ""
     
     class Config:
         extra = "allow"

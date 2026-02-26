@@ -79,7 +79,7 @@ app.add_middleware(
 )
 
 # Configuration from environment
-API_KEY = os.getenv("API_KEY")
+VALID_API_KEY = os.getenv("API_KEY")
 GUVI_CALLBACK_URL = os.getenv(
     "GUVI_CALLBACK_URL",
     "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
@@ -208,7 +208,7 @@ async def handle_message(
     6. Sends callback (non-blocking)
     """
     # API Key validation
-    if x_api_key != API_KEY:
+    if x_api_key != VALID_API_KEY:
         logger.warning(f"Blocked: Invalid API key attempt from client")
         raise HTTPException(status_code=403, detail="Invalid API Key")
     
@@ -217,12 +217,12 @@ async def handle_message(
     # Get agent from app state
     agent: ScamAgent = app.state.agent
     
-    # Extract message text from request.message['content']
+    # Extract message text from request.message
     message_data = request.message
     if isinstance(message_data, dict):
-        message_text = message_data.get("content", "")
+        message_text = message_data.get("text", "") or message_data.get("content", "")
     else:
-        message_text = message_data.content
+        message_text = message_data.get_text()
     
     history = request.get_conversation_history()
     metadata = request.metadata or {}
@@ -261,7 +261,7 @@ async def handle_message(
         # Step 3: Save to database (with fallback to in-memory)
         new_message = {
             "sender": message_data.get("sender", "user") if isinstance(message_data, dict) else getattr(message_data, "sender", "user"),
-            "content": message_text,
+            "text": message_text,
             "timestamp": message_data.get("timestamp", 0) if isinstance(message_data, dict) else getattr(message_data, "timestamp", 0)
         }
         

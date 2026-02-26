@@ -110,7 +110,7 @@ class DatabaseManager:
             )
             # Verify connection by pinging
             await self.client.admin.command("ping")
-            self.db = self.client.get_database("honeypot")
+            self.db = self.client.get_database("scam_logs")
             self._connection_verified = True
             self._use_in_memory = False
             logger.info("SUCCESS: Connected to MongoDB Atlas")
@@ -149,7 +149,7 @@ class DatabaseManager:
             return await self.in_memory.get_conversation(session_id)
         
         try:
-            conversation = await self.db.conversations.find_one({"sessionId": session_id})
+            conversation = await self.db.scam_logs.find_one({"sessionId": session_id})
             if conversation:
                 conversation["_id"] = str(conversation["_id"])  # Convert ObjectId to string
             return conversation
@@ -195,7 +195,7 @@ class DatabaseManager:
                 },
                 "messageCount": 0
             }
-            await self.db.conversations.insert_one(conversation_doc)
+            await self.db.scam_logs.insert_one(conversation_doc)
             return True
         except Exception as e:
             logger.error(f"Error saving conversation: {e}")
@@ -250,7 +250,7 @@ class DatabaseManager:
                     "$each": intelligence["suspiciousKeywords"]
                 }
             
-            result = await self.db.conversations.update_one(
+            result = await self.db.scam_logs.update_one(
                 {"sessionId": session_id},
                 update_ops,
                 upsert=True
@@ -269,7 +269,7 @@ class DatabaseManager:
             return await self.in_memory.get_all_intelligence()
         
         try:
-            cursor = self.db.conversations.find(
+            cursor = self.db.scam_logs.find(
                 {},
                 {
                     "sessionId": 1,
