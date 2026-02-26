@@ -191,7 +191,7 @@ async def root():
     }
 
 
-@app.post("/", response_model=HoneypotResponse)
+@app.post("/message", response_model=HoneypotResponse)
 async def handle_message(
     request: HoneypotRequest,
     background_tasks: BackgroundTasks,
@@ -212,15 +212,20 @@ async def handle_message(
         logger.warning(f"Blocked: Invalid API key attempt from client")
         raise HTTPException(status_code=403, detail="Invalid API Key")
     
-    logger.info(f"Processing request for session: {request.sessionId}")
+    logger.info(f"Processing request for session: {request.get_session_id()}")
     
     # Get agent from app state
     agent: ScamAgent = app.state.agent
     
-    # Extract message text
-    message_text = request.message.text
-    history = [msg.model_dump() for msg in request.conversationHistory]
-    metadata = request.metadata.model_dump() if request.metadata else {}
+    # Extract message text from request.message['content']
+    message_data = request.message
+    if isinstance(message_data, dict):
+        message_text = message_data.get("content", "")
+    else:
+        message_text = message_data.content
+    
+    history = request.get_conversation_history()
+    metadata = request.metadata or {}
     
     try:
         # Step 1: Detect scam intent
@@ -255,13 +260,13 @@ async def handle_message(
         
         # Step 3: Save to database (with fallback to in-memory)
         new_message = {
-            "sender": request.message.sender,
-            "text": message_text,
-            "timestamp": request.message.timestamp
+            "sender": message_data.get("sender", "user") if isinstance(message_data, dict) else getattr(message_data, "sender", "user"),
+            "content": message_text,
+            "timestamp": message_data.get("timestamp", 0) if isinstance(message_data, dict) else getattr(message_data, "timestamp", 0)
         }
         
         await db_manager.update_conversation(
-            session_id=request.sessionId,
+            session_id=request.get_session_id(),
             new_messages=[new_message],
             intelligence=intel
         )
@@ -277,7 +282,7 @@ async def handle_message(
         )
         
         callback_payload = {
-            "sessionId": request.sessionId,
+            "sessionId": request.get_session_id(),
             "scamDetected": True,
             "totalMessagesExchanged": len(history) + 1,
             "extractedIntelligence": ext_intel.model_dump(),
@@ -285,9 +290,13 @@ async def handle_message(
         }
         
         # Step 5: Send non-blocking callback
-        background_tasks.add_task(send_guvi_callback_async, request.sessionId, callback_payload)
+        background_tasks.add_task(send_guvi_callback_async, request.get_session_id(), callback_payload)
         
-        return HoneypotResponse(status="success", reply=reply)
+        return HoneypotResponse(
+            status="success",
+            reply=reply,
+            intelligence=intel
+        )
         
     except Exception as e:
         logger.exception(f"Error processing request: {e}")
@@ -296,19 +305,6 @@ async def handle_message(
             status="success",
             reply="I'm having some trouble connecting. Please try again in a moment."
         )
-
-
-@app.post("/message", response_model=HoneypotResponse)
-async def handle_message_v1(
-    request: HoneypotRequest,
-    background_tasks: BackgroundTasks,
-    x_api_key: str = Header(None)
-):
-    """
-    Backward-compatible endpoint for /message.
-    Routes to the same logic as root endpoint.
-    """
-    return await handle_message(request, background_tasks, x_api_key)
 
 
 # =============================================================================
