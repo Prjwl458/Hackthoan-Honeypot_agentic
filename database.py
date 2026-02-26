@@ -44,7 +44,11 @@ class InMemoryStorage:
                     "phishingLinks": [],
                     "phoneNumbers": [],
                     "suspiciousKeywords": [],
-                    "agentNotes": ""
+                    "agentNotes": "",
+                    "scamType": "Unknown",
+                    "urgencyLevel": "Low",
+                    "riskScore": 10,
+                    "extractedEntities": []
                 },
                 "messageCount": 0
             }
@@ -62,6 +66,11 @@ class InMemoryStorage:
         
         if intelligence.get("agentNotes"):
             intel["agentNotes"] = intelligence["agentNotes"]
+        
+        # New enhanced fields
+        for key in ["scamType", "urgencyLevel", "riskScore", "extractedEntities"]:
+            if intelligence.get(key):
+                intel[key] = intelligence[key]
         
         self._conversations[session_id]["updatedAt"] = datetime.utcnow()
     
@@ -172,7 +181,11 @@ class DatabaseManager:
                     "phishingLinks": [],
                     "phoneNumbers": [],
                     "suspiciousKeywords": [],
-                    "agentNotes": ""
+                    "agentNotes": "",
+                    "scamType": "Unknown",
+                    "urgencyLevel": "Low",
+                    "riskScore": 10,
+                    "extractedEntities": []
                 },
                 "messageCount": 0
             })
@@ -191,7 +204,11 @@ class DatabaseManager:
                     "phishingLinks": [],
                     "phoneNumbers": [],
                     "suspiciousKeywords": [],
-                    "agentNotes": ""
+                    "agentNotes": "",
+                    "scamType": "Unknown",
+                    "urgencyLevel": "Low",
+                    "riskScore": 10,
+                    "extractedEntities": []
                 },
                 "messageCount": 0
             }
@@ -249,6 +266,19 @@ class DatabaseManager:
                 update_ops["$addToSet"] = update_ops.get("$addToSet", {})
                 update_ops["$addToSet"]["intelligence.suspiciousKeywords"] = {
                     "$each": intelligence["suspiciousKeywords"]
+                }
+            
+            # Update new enhanced fields (overwrite)
+            if intelligence.get("scamType"):
+                update_ops["$set"]["intelligence.scamType"] = intelligence["scamType"]
+            if intelligence.get("urgencyLevel"):
+                update_ops["$set"]["intelligence.urgencyLevel"] = intelligence["urgencyLevel"]
+            if intelligence.get("riskScore"):
+                update_ops["$set"]["intelligence.riskScore"] = intelligence["riskScore"]
+            if intelligence.get("extractedEntities"):
+                update_ops["$addToSet"] = update_ops.get("$addToSet", {})
+                update_ops["$addToSet"]["intelligence.extractedEntities"] = {
+                    "$each": intelligence["extractedEntities"]
                 }
             
             result = await self.db.scam_logs.update_one(

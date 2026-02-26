@@ -123,6 +123,11 @@ class IntelligenceData(BaseModel):
     phoneNumbers: List[str] = Field(default_factory=list)
     suspiciousKeywords: List[str] = Field(default_factory=list)
     agentNotes: str = Field(default="")
+    # New enhanced fields
+    scamType: str = Field(default="Unknown")
+    urgencyLevel: str = Field(default="Low")
+    riskScore: int = Field(default=10)
+    extractedEntities: List[str] = Field(default_factory=list)
     
     class Config:
         extra = "allow"

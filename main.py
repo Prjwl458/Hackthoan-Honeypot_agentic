@@ -243,7 +243,7 @@ async def handle_message(
     await db_manager.update_conversation(
         session_id=request.get_session_id(),
         new_messages=[new_message],
-        intelligence={"bankAccounts": [], "upiIds": [], "phishingLinks": [], "phoneNumbers": [], "suspiciousKeywords": [], "agentNotes": ""}
+        intelligence={"bankAccounts": [], "upiIds": [], "phishingLinks": [], "phoneNumbers": [], "suspiciousKeywords": [], "agentNotes": "", "scamType": "Unknown", "urgencyLevel": "Low", "riskScore": 10, "extractedEntities": []}
     )
     
     try:

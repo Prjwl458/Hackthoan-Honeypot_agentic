@@ -216,7 +216,12 @@ class ScamAgent:
             "phishingLinks": list(set(re.findall(url_pattern, full_text))),
             "phoneNumbers": list(set(re.findall(phone_pattern, full_text))),
             "suspiciousKeywords": [],
-            "agentNotes": ""
+            "agentNotes": "",
+            # New enhanced fields
+            "scamType": "",
+            "urgencyLevel": "",
+            "extractedEntities": [],
+            "riskScore": 0
         }
         
         # LLM-based extraction for sophisticated analysis
@@ -228,6 +233,9 @@ class ScamAgent:
         1. Identify Intent: Is the scammer trying to create urgency, ask for sensitive data, or offering something too good to be true?
         2. Generic Extraction: Extract any names of banks, financial apps (like UPI, WhatsApp, YONO), or specific types of sensitive data requested (OTP, CVV, PIN, passwords).
         3. Dynamic Keyword Logic: Identify any specific words or phrases that convey pressure, fear, or excitement as 'suspiciousKeywords'.
+        4. Classify Scam Type: Choose ONE from: Phishing, Lottery, Tech Support, Investment, Romance, Other
+        5. Assess Urgency: Rate as Low, Medium, or High based on time pressure words
+        6. Calculate Risk Score: Rate 1-100 based on danger level (higher = more dangerous)
 
         Return ONLY a raw JSON object with these exact keys: 
         bankAccounts (list), 
@@ -235,7 +243,11 @@ class ScamAgent:
         phishingLinks (list), 
         phoneNumbers (list), 
         suspiciousKeywords (list), 
-        agentNotes (string summary: include the intent identified and any financial entities/apps found).
+        agentNotes (string summary: include the intent identified and any financial entities/apps found),
+        scamType (string: Phishing/Lottery/Tech Support/Investment/Romance/Other),
+        urgencyLevel (string: Low/Medium/High),
+        riskScore (integer: 1-100),
+        extractedEntities (list: combine all UPI IDs, phone numbers, and links found)
 
         DO NOT include any explanation or markdown formatting like ```json.
         """
@@ -264,6 +276,16 @@ class ScamAgent:
                     
                     if llm_intel.get("agentNotes"):
                         intel["agentNotes"] = llm_intel["agentNotes"]
+                    
+                    # New enhanced fields from LLM
+                    if llm_intel.get("scamType"):
+                        intel["scamType"] = llm_intel["scamType"]
+                    if llm_intel.get("urgencyLevel"):
+                        intel["urgencyLevel"] = llm_intel["urgencyLevel"]
+                    if llm_intel.get("riskScore"):
+                        intel["riskScore"] = int(llm_intel["riskScore"])
+                    if llm_intel.get("extractedEntities"):
+                        intel["extractedEntities"] = llm_intel["extractedEntities"]
                         
             except json.JSONDecodeError as e:
                 logger.warning(f"JSON Decode Error: {e}")
@@ -281,5 +303,20 @@ class ScamAgent:
                 intel[key] = []
         if "agentNotes" not in intel or not intel["agentNotes"]:
             intel["agentNotes"] = "Engagement ongoing."
+        
+        # Set defaults for new enhanced fields
+        if not intel.get("scamType"):
+            intel["scamType"] = "Unknown"
+        if not intel.get("urgencyLevel"):
+            intel["urgencyLevel"] = "Low"
+        if not intel.get("riskScore"):
+            intel["riskScore"] = 10  # Default low risk
+        if not intel.get("extractedEntities"):
+            # Combine all entities from regex
+            entities = []
+            entities.extend(intel.get("upiIds", []))
+            entities.extend(intel.get("phoneNumbers", []))
+            entities.extend(intel.get("phishingLinks", []))
+            intel["extractedEntities"] = list(set(entities))
         
         return intel
