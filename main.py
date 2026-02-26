@@ -79,7 +79,7 @@ app.add_middleware(
 )
 
 # Configuration from environment
-VALID_API_KEY = os.getenv("API_KEY")
+API_KEY = os.getenv("API_KEY", "prajwal_hackathon_key_2310")
 GUVI_CALLBACK_URL = os.getenv(
     "GUVI_CALLBACK_URL",
     "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
@@ -208,7 +208,12 @@ async def handle_message(
     6. Sends callback (non-blocking)
     """
     # API Key validation
-    if x_api_key != VALID_API_KEY:
+    header_key = x_api_key
+    print(f"DEBUG: Received key: {header_key[:4]}...") if header_key else None
+    
+    if not header_key or header_key != API_KEY:
+        logger.warning(f"Blocked: Invalid API key attempt from client")
+        raise HTTPException(status_code=403, detail="Invalid API Key")
         logger.warning(f"Blocked: Invalid API key attempt from client")
         raise HTTPException(status_code=403, detail="Invalid API Key")
     
