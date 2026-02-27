@@ -1,9 +1,11 @@
 # Production-locked requirements for Security Scanner API
 # Generated for Prajwal's Class 11 Portfolio Project
+# These versions have pre-built binaries to avoid Rust compilation on Render
 
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
-pydantic==2.5.3
+pydantic==2.6.1
+pydantic-core==2.16.2
 motor==3.3.2
 httpx==0.26.0
 python-dotenv==1.0.0
