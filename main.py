@@ -16,7 +16,7 @@ from collections import defaultdict
 from time import time
 
 import httpx
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -103,23 +103,15 @@ app = FastAPI(
 
 # CORS Configuration
 # =============================================================================
-# Configure CORS for Expo mobile app and production domains.
-# Add your Expo/React Native origins here for production deployment.
-#
-# Development: localhost:19000 (Expo default)
-# Production: Replace with your actual domain
+# Allow all origins for development/testing.
+# In production, restrict to your actual domains.
 # =============================================================================
-CORS_ORIGINS = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:19000,http://localhost:19001,http://localhost:8081"
-).split(",")
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["Authorization", "X-API-Key", "Content-Type"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Global Exception Handler - returns clean 503 JSON on failures
@@ -142,7 +134,8 @@ async def validation_exception_handler(request, exc):
     )
 
 # Configuration from environment
-API_KEY = os.getenv("API_KEY", "")  # Must be set in .env
+# Fallback to default key for development if not set
+EXPECTED_KEY = os.getenv("API_KEY", "prajwal_hackathon_key_2310")
 GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "")
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 
@@ -222,11 +215,25 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
     
     Security Note:
         All production endpoints should require valid API key.
-        The key must match the API_KEY environment variable.
+        The key must match the EXPECTED_KEY environment variable.
     """
-    if x_api_key != API_KEY:
+    # Handle missing or empty API key
+    if not x_api_key:
+        logger.warning("403: Missing API Key header")
+        raise HTTPException(status_code=403, detail="Missing API Key")
+    
+    # Strip whitespace from provided key
+    provided_key = x_api_key.strip()
+    
+    # Log key lengths for debugging
+    logger.warning(f"Security: Expected key len={len(EXPECTED_KEY)}, Received key len={len(provided_key)}")
+    
+    # Compare keys
+    if provided_key != EXPECTED_KEY:
+        logger.warning(f"403: Invalid API Key provided: {provided_key[:4]}...")
         raise HTTPException(status_code=403, detail="Invalid API Key")
-    return x_api_key
+    
+    return provided_key
 
 
 # =============================================================================
@@ -275,7 +282,7 @@ async def root():
 async def handle_message(
     request: HoneypotRequest,
     background_tasks: BackgroundTasks,
-    x_api_key: str = Header(None)
+    api_key: str = Depends(verify_api_key)
 ):
     """
     Primary endpoint for honeypot scam engagement.
@@ -287,20 +294,13 @@ async def handle_message(
     5. Saves to database
     6. Sends callback (non-blocking)
     """
-    # API Key validation
-    header_key = x_api_key
-    logger.debug(f"Received API key: {header_key[:4]}...")
-    
-    if not header_key or header_key != API_KEY:
-        logger.warning(f"Blocked: Invalid API key attempt from client")
-        raise HTTPException(status_code=403, detail="Invalid API Key")
+    # API Key is already validated by Depends(verify_api_key)
+    logger.info(f"API Key validated for request")
     
     # Rate limiting check
     session_id = request.get_session_id()
     if not check_rate_limit(session_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Max 10 requests per minute.")
-        logger.warning(f"Blocked: Invalid API key attempt from client")
-        raise HTTPException(status_code=403, detail="Invalid API Key")
     
     logger.info(f"Processing request for session: {request.get_session_id()}")
     
