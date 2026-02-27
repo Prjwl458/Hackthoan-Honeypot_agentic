@@ -333,4 +333,10 @@ class ScamAgent:
             entities.extend(intel.get("phishingLinks", []))
             intel["extractedEntities"] = list(set(entities))
         
+        # Add threatSource if sender_id provided
+        if sender_id:
+            intel["threatSource"] = sender_id
+        else:
+            intel["threatSource"] = ""
+        
         return intel

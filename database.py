@@ -185,7 +185,8 @@ class DatabaseManager:
                     "scamType": "Unknown",
                     "urgencyLevel": "Low",
                     "riskScore": 10,
-                    "extractedEntities": []
+                    "extractedEntities": [],
+                    "threatSource": ""
                 },
                 "messageCount": 0
             })
@@ -280,6 +281,8 @@ class DatabaseManager:
                 update_ops["$addToSet"]["intelligence.extractedEntities"] = {
                     "$each": intelligence["extractedEntities"]
                 }
+            if intelligence.get("threatSource"):
+                update_ops["$set"]["intelligence.threatSource"] = intelligence["threatSource"]
             
             result = await self.db.scam_logs.update_one(
                 {"sessionId": session_id},

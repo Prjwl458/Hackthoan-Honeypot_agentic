@@ -134,6 +134,7 @@ class IntelligenceData(BaseModel):
     urgencyLevel: str = "Low"
     riskScore: int = 0
     extractedEntities: List[str] = Field(default_factory=list)
+    threatSource: str = ""  # Sender's phone number/ID for blocked list
     
     class Config:
         extra = "allow"
