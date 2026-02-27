@@ -1,100 +1,131 @@
-# 🛡️ Agentic AI Honeypot
+# 🔐 Agentic AI Honeypot - Cyber-Intelligence Engine
 
-A production-ready, asynchronous AI agent designed to engage with scammers, analyze their intent, and extract actionable intelligence in real-time.
+A production-grade FastAPI application that intercepts scam messages, analyzes them using LLMs, and extracts actionable intelligence for law enforcement and security research.
 
 ## 🚀 Features
 
-- **Async Architecture**: Non-blocking FastAPI with httpx for high-performance concurrent requests
-- **Intelligence Extraction**: LLM-powered analysis to identify UPI IDs, bank accounts, phishing links, and phone numbers
-- **Tarpitting Strategy**: Keeps scammers engaged with realistic, varied responses
-- **Database Persistence**: MongoDB Atlas with in-memory fallback for resilience
-- **Production Ready**: Pydantic validation, global error handling, structured logging
+- **Real-time Scam Detection** - AI-powered analysis using Llama 3.1
+- **Intelligence Extraction** - Bank accounts, UPI IDs, phone numbers, phishing links
+- **Sender Verification** - Cross-references sender claims with message content
+- **Risk Scoring** - Urgency level and threat assessment
+- **MongoDB Persistence** - Cloud database with in-memory fallback
+- **Rate Limiting** - 10 requests/minute per session
+- **Production Ready** - Global error handling, health checks, CORS enabled
 
-## 🛠️ Tech Stack
+## 🏗️ System Architecture
 
-- **Framework**: FastAPI + Python 3.11+
-- **AI**: OpenRouter (Llama 3.1)
-- **Database**: MongoDB Atlas (Motor async driver)
-- **Deployment**: Render
-
-## 📋 Environment Variables
-
-Create a `.env` file:
-
-```env
-# API Security
-API_KEY=your_api_key_here
-
-# LLM Configuration
-OPENROUTER_API_KEY=sk-or-v1-...
-
-# Database (optional - uses in-memory fallback if not set)
-MONGODB_URI=mongodb+srv://...
-
-# Callback URL (optional)
-GUVI_CALLBACK_URL=https://your-callback-url.com
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   Mobile App    │────▶│   FastAPI API    │────▶│   Llama 3.1    │
+│   (Expo/React)  │     │   (Port 9000)    │     │   (OpenRouter) │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+                               │
+                               ▼
+                        ┌──────────────────┐
+                        │   MongoDB Atlas  │
+                        │   (scam_logs)    │
+                        └──────────────────┘
 ```
 
-## 🏃 Quick Start
+### Components
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Web Framework | FastAPI 0.109.0 | Async API server |
+| LLM Engine | Llama 3.1 8B | Scam detection & analysis |
+| Database | MongoDB Atlas | Persistent intelligence storage |
+| HTTP Client | httpx | Non-blocking API calls |
+| Validation | Pydantic 2.5.3 | Schema enforcement |
+
+## 📦 Setup
+
+### 1. Clone & Install
 
 ```bash
+# Clone the repository
+git clone <repository-url>
+cd honeypot-ai
+
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
+
 # Install dependencies
 pip install -r requirements.txt
-
-# Run locally
-uvicorn main:app --reload
-
-# Deploy to Render
-# Set environment variables in Render dashboard
 ```
 
-## 📡 API Endpoints
+### 2. Configure Environment
 
-### Health Check
 ```bash
-GET /
+# Copy the template
+copy .env.example .env
+
+# Edit .env with your keys:
+# - API_KEY: Your secure API key
+# - OPENROUTER_API_KEY: Get from https://openrouter.ai/
+# - MONGODB_URI: Get from MongoDB Atlas (optional)
 ```
 
-### Process Message
+### 3. Run the Server
+
 ```bash
-POST / -H "x-api-key: YOUR_API_KEY"
+# Development
+python -m uvicorn main:app --host 127.0.0.1 --port 9000 --reload
+
+# Production
+python -m uvicorn main:app --host 0.0.0.0 --port 9000
 ```
 
-Request body:
+### 4. Health Check
+
+```bash
+curl http://127.0.0.1:9000/health
+# Response: {"status":"online"}
+```
+
+## 📡 Sample API Request
+
+### POST /message
+
+```bash
+curl -X POST http://127.0.0.1:9000/message \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your_api_key_here" \
+  -d '{
+    "message": "Your Netflix account has been suspended. Verify now to restore: netflix-verify.com/restore",
+    "senderId": "+1-555-0123",
+    "sessionId": "session_001"
+  }'
+```
+
+### Response
+
 ```json
 {
-  "sessionId": "unique-session-id",
-  "message": {
-    "sender": "scammer",
-    "text": "Your bank account is blocked! Pay now.",
-    "timestamp": 1234567890
-  },
-  "conversationHistory": [],
-  "metadata": {
-    "channel": "SMS",
-    "language": "English"
+  "status": "success",
+  "response": "Threat Detected: Phishing attempt - Suspicious Netflix impersonation scam",
+  "intelligence": {
+    "scamType": "Phishing",
+    "urgencyLevel": "High",
+    "riskScore": 85,
+    "extractedEntities": {
+      "phishingLinks": ["netflix-verify.com"],
+      "phoneNumbers": ["+1-555-0123"],
+      "bankAccounts": [],
+      "upiIds": []
+    }
   }
 }
 ```
 
-## 📁 Project Structure
-
-```
-├── main.py          # FastAPI application entry point
-├── agent.py         # ScamAgent for AI processing
-├── database.py      # MongoDB connection manager
-├── models.py        # Pydantic schemas
-├── requirements.txt # Python dependencies
-└── .env.example    # Environment template
-```
-
 ## 🔒 Security
 
-- All secrets stored in environment variables
-- No hardcoded API keys
-- CORS configured for production
-- Input validation with Pydantic
+- All secrets loaded from environment variables (`.env`)
+- API key required for all endpoints
+- Rate limited: 10 requests/minute per session
+- CORS configured for production deployment
 
 ## 📄 License
 
-MIT License
+MIT License - Built for Prajwal's Class 11 Portfolio Project

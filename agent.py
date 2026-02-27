@@ -194,13 +194,40 @@ class ScamAgent:
         Extract actionable intelligence from scammer messages.
         
         Uses both regex patterns and LLM analysis for comprehensive extraction.
+        The risk scoring system analyzes multiple factors:
+        
+        RISK SCORING LOGIC (0-100 scale):
+        --------------------------------
+        - Base Score: Starts at 0
+        - Urgency Language: +20-30 for words like 'urgent', 'immediately', 'limited time'
+        - Financial Requests: +25 for OTP, CVV, password, bank details
+        - Phishing Indicators: +30 for suspicious links
+        - Sender Mismatch: +15-20 if sender claims bank/institution but is personal number
+        
+        SCAM TYPE CLASSIFICATION:
+        - Phishing: Fake login pages, account suspension claims
+        - Lottery: Fake prize claims, winning notifications
+        - Tech Support: Fake helpdesk, virus warnings
+        - Investment: Get-rich-quick schemes
+        - Romance: Long-game trust building
         
         Args:
             message: Current message to analyze
-            history: Previous messages
+            history: Previous messages in conversation
+            sender_id: Sender's phone number (optional, for verification)
             
         Returns:
-            Dictionary containing extracted intelligence
+            Dictionary containing:
+                - bankAccounts: Extracted bank account numbers
+                - upiIds: UPI payment addresses
+                - phishingLinks: Suspicious URLs
+                - phoneNumbers: Contact numbers mentioned
+                - suspiciousKeywords: Red flag words
+                - agentNotes: Human-readable summary
+                - scamType: Classification (Phishing/Lottery/etc)
+                - urgencyLevel: Low/Medium/High
+                - riskScore: 0-100 danger rating
+                - extractedEntities: Combined list of all entities
         """
         # Combine all text for analysis
         all_messages = [msg.get("text", "") for msg in history] + [message]

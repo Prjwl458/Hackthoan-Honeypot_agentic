@@ -12,6 +12,8 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
+from collections import defaultdict
+from time import time
 
 import httpx
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
@@ -23,6 +25,37 @@ from pydantic import ValidationError
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
 from database import db_manager
 from agent import ScamAgent
+
+# Rate Limiter: 10 requests per minute per session
+rate_limit_store = defaultdict(list)
+
+def check_rate_limit(session_id: str, max_requests: int = 10, window_seconds: int = 60) -> bool:
+    """
+    Check if session has exceeded rate limit using token bucket algorithm.
+    
+    Args:
+        session_id: Unique identifier for the user's session.
+        max_requests: Maximum requests allowed within the time window.
+        window_seconds: Time window in seconds (default 60 = 1 minute).
+    
+    Returns:
+        True if request is allowed, False if rate limit exceeded.
+    
+    Algorithm:
+        1. Get current timestamp
+        2. Remove all old timestamps outside the window
+        3. If remaining requests >= max_requests, return False
+        4. Otherwise, add current timestamp and return True
+    """
+    now = time()
+    # Clean old entries
+    rate_limit_store[session_id] = [t for t in rate_limit_store[session_id] if now - t < window_seconds]
+    
+    if len(rate_limit_store[session_id]) >= max_requests:
+        return False
+    
+    rate_limit_store[session_id].append(now)
+    return True
 
 # Configure logging
 logging.basicConfig(
@@ -68,22 +101,49 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# TODO: Restrict this before production deployment with mobile app
-# Example: CORSMiddleware(app, allow_origins=["https://yourapp.com"])
+# CORS Configuration
+# =============================================================================
+# Configure CORS for Expo mobile app and production domains.
+# Add your Expo/React Native origins here for production deployment.
+#
+# Development: localhost:19000 (Expo default)
+# Production: Replace with your actual domain
+# =============================================================================
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:19000,http://localhost:19001,http://localhost:8081"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for now
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "X-API-Key", "Content-Type"],
 )
 
+# Global Exception Handler - returns clean 503 JSON on failures
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Catch all unhandled exceptions and return clean 503 response."""
+    logger.error(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={"status": "error", "detail": "Service temporarily unavailable"}
+    )
+
+# Validation error handler
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    """Handle validation errors gracefully."""
+    return JSONResponse(
+        status_code=422,
+        content={"status": "error", "detail": "Invalid request parameters"}
+    )
+
 # Configuration from environment
-API_KEY = os.getenv("API_KEY", "prajwal_hackathon_key_2310")
-GUVI_CALLBACK_URL = os.getenv(
-    "GUVI_CALLBACK_URL",
-    "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-)
+API_KEY = os.getenv("API_KEY", "")  # Must be set in .env
+GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "")
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 
 
@@ -148,7 +208,22 @@ async def global_exception_handler(request, exc):
 # =============================================================================
 
 async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
-    """Verify the API key from request headers."""
+    """
+    Verify the API key from request headers for authentication.
+    
+    Args:
+        x_api_key: API key passed in the X-API-Key header.
+    
+    Returns:
+        The API key if valid.
+    
+    Raises:
+        HTTPException: 403 if API key is invalid or missing.
+    
+    Security Note:
+        All production endpoints should require valid API key.
+        The key must match the API_KEY environment variable.
+    """
     if x_api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API Key")
     return x_api_key
@@ -178,6 +253,11 @@ async def send_guvi_callback_async(session_id: str, payload: dict):
 # =============================================================================
 # API Endpoints
 # =============================================================================
+
+@app.get("/health")
+async def health_check():
+    """Simple health check for wake server button."""
+    return {"status": "online"}
 
 @app.get("/")
 async def root():
@@ -209,11 +289,16 @@ async def handle_message(
     """
     # API Key validation
     header_key = x_api_key
-    print(f"DEBUG: Received key: {header_key[:4]}...") if header_key else None
+    logger.debug(f"Received API key: {header_key[:4]}...")
     
     if not header_key or header_key != API_KEY:
         logger.warning(f"Blocked: Invalid API key attempt from client")
         raise HTTPException(status_code=403, detail="Invalid API Key")
+    
+    # Rate limiting check
+    session_id = request.get_session_id()
+    if not check_rate_limit(session_id):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Max 10 requests per minute.")
         logger.warning(f"Blocked: Invalid API key attempt from client")
         raise HTTPException(status_code=403, detail="Invalid API Key")
     
