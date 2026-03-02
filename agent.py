@@ -37,6 +37,7 @@ def pre_process_message(message: str) -> Optional[Dict[str, Any]]:
     otp_pattern = r'\b\d{4,6}\b'
     otp_keywords = ['otp', 'verification', 'code', 'entered', 'submitted']
     if re.search(otp_pattern, message) and any(kw in message_lower for kw in otp_keywords):
+        logger.info("WHITELIST MATCH: OTP pattern detected")
         return {
             "riskScore": 5,
             "scamType": "Safe/Transactional",
@@ -53,6 +54,7 @@ def pre_process_message(message: str) -> Optional[Dict[str, Any]]:
     # Banking Pattern: Account balance updates
     bank_keywords = ['available', 'balance', 'credited', 'debited', 'a/c', 'account']
     if any(kw in message_lower for kw in bank_keywords) and ('rs.' in message_lower or '₹' in message):
+        logger.info("WHITELIST MATCH: Banking pattern detected")
         return {
             "riskScore": 10,
             "scamType": "Bank Update",
@@ -90,11 +92,13 @@ def apply_evidence_guard(intel: Dict[str, Any]) -> Dict[str, Any]:
     has_bank = bool(intel.get("bankAccounts"))
     has_evidence = has_links or has_upi or has_bank
     
+    logger.info(f"EVIDENCE CHECK: score={current_score}, has_links={has_links}, has_upi={has_upi}, has_bank={has_bank}")
+    
     current_score = intel.get("riskScore", 0)
     
     # If high risk but NO evidence, apply cap
     if current_score > 70 and not has_evidence:
-        logger.info(f"Evidence Guard triggered: High risk ({current_score}) but no physical evidence found")
+        logger.info(f"EVIDENCE GUARD TRIGGERED: High risk ({current_score}) but no physical evidence found - capping score")
         intel["riskScore"] = 40
         intel["scamType"] = "Unverified/Suspicious"
         intel["agentNotes"] = (

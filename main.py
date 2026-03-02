@@ -24,7 +24,7 @@ from pydantic import ValidationError
 
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
 from database import db_manager
-from agent import ScamAgent
+from agent import ScamAgent, pre_process_message, apply_evidence_guard
 
 # Rate Limiter: 10 requests per minute per session
 rate_limit_store = defaultdict(list)
@@ -344,6 +344,31 @@ async def handle_message(
         "timestamp": message_data.get("timestamp", 0) if isinstance(message_data, dict) else getattr(message_data, "timestamp", 0)
     }
     
+    # =====================================================================
+    # STEP 1: WHITELIST PRE-PROCESSING (skip AI if safe pattern detected)
+    # =====================================================================
+    whitelist_result = pre_process_message(message_text)
+    if whitelist_result:
+        logger.info(f"WHITELIST HIT: {whitelist_result.get('scamType')} - returning immediately")
+        # Build response from whitelist result
+        ext_intel = IntelligenceData(
+            bankAccounts=whitelist_result.get("bankAccounts", []),
+            upiIds=whitelist_result.get("upiIds", []),
+            phishingLinks=whitelist_result.get("phishingLinks", []),
+            phoneNumbers=whitelist_result.get("phoneNumbers", []),
+            suspiciousKeywords=whitelist_result.get("suspiciousKeywords", []),
+            agentNotes=whitelist_result.get("agentNotes", ""),
+            scamType=whitelist_result.get("scamType", "Unknown"),
+            urgencyLevel=whitelist_result.get("urgencyLevel", "Low"),
+            riskScore=whitelist_result.get("riskScore", 10),
+            extractedEntities=whitelist_result.get("extractedEntities", [])
+        )
+        return HoneypotResponse(
+            status="success",
+            response=whitelist_result.get("agentNotes", "Safe message detected"),
+            intelligence=ext_intel
+        )
+    
     await db_manager.update_conversation(
         session_id=request.get_session_id(),
         new_messages=[new_message],
@@ -377,7 +402,12 @@ async def handle_message(
                 "threatSource": sender_id or ""
             }
         
-        # Step 2: Update database with extracted intelligence
+        # Step 2: Apply Evidence Guard - cap risk if high but no physical evidence
+        logger.info(f"Before Evidence Guard: riskScore={intel.get('riskScore')}, links={intel.get('phishingLinks')}, upi={intel.get('upiIds')}, bank={intel.get('bankAccounts')}")
+        intel = apply_evidence_guard(intel)
+        logger.info(f"After Evidence Guard: riskScore={intel.get('riskScore')}, scamType={intel.get('scamType')}")
+        
+        # Step 3: Update database with extracted intelligence
         # (initial save already done at top for audit logging)
         await db_manager.update_conversation(
             session_id=request.get_session_id(),
