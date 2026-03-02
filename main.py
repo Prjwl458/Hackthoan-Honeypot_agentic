@@ -11,7 +11,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 from collections import defaultdict
 from time import time
 
@@ -151,7 +151,8 @@ DEFAULT_INTEL = {
     "urgencyLevel": "Low",
     "riskScore": 5,
     "extractedEntities": [],
-    "threatSource": "System"
+    "threatSource": "System",
+    "isPhishing": False
 }
 
 
@@ -249,6 +250,53 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
         raise HTTPException(status_code=403, detail="Invalid API Key")
     
     return provided_key
+
+
+def finalize_intelligence(intel: Dict[str, Any], reply: str) -> tuple:
+    """
+    Finalize intelligence with synchronization rules.
+    
+    Rule 1 - Boolean Sync: isPhishing = True if riskScore > 0
+    Rule 2 - Note-Evidence Link: agentNotes MUST mention extracted artifacts
+    Rule 3 - Reply-Score Sync: reply must match riskScore category
+    
+    Returns:
+        tuple: (updated_intel, updated_reply)
+    """
+    # Rule 1: Boolean Sync
+    intel["isPhishing"] = intel.get("riskScore", 0) > 0
+    
+    # Rule 2: Note-Evidence Link - Add evidence mentions to agentNotes
+    evidence_parts = []
+    phishing_links = intel.get("phishingLinks", [])
+    upi_ids = intel.get("upiIds", [])
+    bank_accounts = intel.get("bankAccounts", [])
+    
+    if phishing_links and len(phishing_links) > 0 and phishing_links[0]:
+        evidence_parts.append(f"Detected suspicious link: {phishing_links[0]}")
+    if upi_ids and len(upi_ids) > 0 and upi_ids[0]:
+        evidence_parts.append(f"Detected UPI ID: {upi_ids[0]}")
+    if bank_accounts and len(bank_accounts) > 0 and bank_accounts[0]:
+        evidence_parts.append(f"Detected bank account: {bank_accounts[0]}")
+    
+    if evidence_parts:
+        original_notes = intel.get("agentNotes", "")
+        evidence_str = " | ".join(evidence_parts)
+        if original_notes and evidence_str not in original_notes:
+            intel["agentNotes"] = f"{evidence_str}. {original_notes}"
+        else:
+            intel["agentNotes"] = evidence_str
+    
+    # Rule 3: Reply-Score Sanitization
+    risk_score = intel.get("riskScore", 0)
+    if 0 <= risk_score <= 10:
+        reply = "Safe/Transactional"
+    elif 11 <= risk_score <= 50:
+        reply = "Suspicious/Unverified"
+    else:  # 51-100
+        reply = "Confirmed Phishing/Scam"
+    
+    return intel, reply
 
 
 # =============================================================================
@@ -355,10 +403,14 @@ async def handle_message(
             "agentNotes": whitelist_result.get("agentNotes", "Safe message detected"),
             "urgencyLevel": whitelist_result.get("urgencyLevel", "Low")
         })
+        # Apply synchronization rules (isPhishing, reply-score sync)
+        reply_text = intel_response["agentNotes"]
+        intel_response, reply_text = finalize_intelligence(intel_response, reply_text)
+        
         # Return complete response matching the AI flow structure
         return HoneypotResponse(
             status="success",
-            reply=intel_response["agentNotes"],
+            reply=reply_text,
             intelligence=intel_response
         )
     
@@ -470,6 +522,9 @@ async def handle_message(
             "riskScore": intel.get("riskScore", 0),
             "extractedEntities": ensure_list(intel.get("extractedEntities", []))
         }
+        
+        # Apply Synchronization Rules: Boolean Sync, Note-Evidence Link, Reply-Score Sanitization
+        intel_dict, reply = finalize_intelligence(intel_dict, reply)
         
         logger.info(f"FINAL INTEL OBJECT: {intel_dict}")
         

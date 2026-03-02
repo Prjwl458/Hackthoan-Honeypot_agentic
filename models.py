@@ -135,6 +135,7 @@ class IntelligenceData(BaseModel):
     riskScore: int = 0
     extractedEntities: List[str] = Field(default_factory=list)
     threatSource: str = ""  # Sender's phone number/ID for blocked list
+    isPhishing: bool = False  # True if any suspicious pattern detected (riskScore > 0)
     
     class Config:
         extra = "allow"
