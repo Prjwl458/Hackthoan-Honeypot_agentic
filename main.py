@@ -436,6 +436,11 @@ async def handle_message(
             reply=reply,  # This is now the Summary Verdict
             intelligence=ext_intel
         )
+    
+    except Exception as e:
+        # Let errors propagate so we can see actual traceback in logs
+        logger.exception(f"Error processing request: {e}")
+        raise
 
 
 # =============================================================================
