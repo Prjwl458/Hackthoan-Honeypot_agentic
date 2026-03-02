@@ -36,7 +36,8 @@ from database import db_manager
 from agent import ScamAgent, pre_process_message, apply_evidence_guard
 
 # v1.2 Titanium: Rate Limiting with slowapi (10 requests per minute per IP)
-limiter = Limiter(key_func=get_remote_address)
+# Using memory storage to avoid Redis dependency on Render
+limiter = Limiter(key_func=get_remote_address, storage_uri='memory://')
 
 # Legacy rate limiter for session-based tracking (kept for compatibility)
 rate_limit_store = defaultdict(list)
@@ -524,10 +525,10 @@ async def root():
 @app.post("/message", response_model=HoneypotResponse)
 @limiter.limit("10/minute")
 async def handle_message(
-    request: HoneypotRequest,
+    message_request: HoneypotRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
-    api_key: str = Depends(verify_api_key),
-    raw_request: Request = None
+    api_key: str = Depends(verify_api_key)
 ):
     """
     v1.2 Titanium: Primary endpoint for honeypot scam engagement.
@@ -556,17 +557,17 @@ async def handle_message(
     logger.info(f"API Key validated for request")
     
     # v1.2 Titanium: Legacy rate limiting check (session-based)
-    session_id = request.get_session_id()
+    session_id = message_request.get_session_id()
     if not check_rate_limit(session_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Max 10 requests per minute.")
     
-    logger.info(f"Processing request for session: {request.get_session_id()}")
+    logger.info(f"Processing request for session: {message_request.get_session_id()}")
     
     # Get agent from app state
     agent: ScamAgent = app.state.agent
     
-    # Extract message text from request.message
-    message_data = request.message
+    # Extract message text from message_request.message
+    message_data = message_request.message
     if isinstance(message_data, dict):
         raw_text = message_data.get("text", "") or message_data.get("content", "")
     else:
@@ -603,8 +604,8 @@ async def handle_message(
             intelligence=intel_response
         )
     
-    history = request.get_conversation_history()
-    metadata = request.metadata or {}
+    history = message_request.get_conversation_history()
+    metadata = message_request.metadata or {}
     
     # AUDIT LOGGING: Save EVERY request to database immediately
     # This ensures we capture all incoming messages for debugging/analysis
@@ -623,7 +624,7 @@ async def handle_message(
     }
     
     await db_manager.update_conversation(
-        session_id=request.get_session_id(),
+        session_id=message_request.get_session_id(),
         new_messages=[new_message],
         intelligence={"bankAccounts": [], "upiIds": [], "phishingLinks": [], "phoneNumbers": [], "suspiciousKeywords": [], "agentNotes": "", "scamType": "Unknown", "urgencyLevel": "Low", "riskScore": 10, "extractedEntities": [], "threatSource": sender_id or ""}
     )
@@ -662,7 +663,7 @@ async def handle_message(
         # Step 3: Update database with extracted intelligence
         # (initial save already done at top for audit logging)
         await db_manager.update_conversation(
-            session_id=request.get_session_id(),
+            session_id=message_request.get_session_id(),
             new_messages=[],
             intelligence=intel
         )
@@ -765,13 +766,13 @@ async def handle_message(
         is_scam = intel.get("riskScore", 0) > 30
         if is_scam:
             callback_payload = {
-                "sessionId": request.get_session_id(),
+                "sessionId": message_request.get_session_id(),
                 "scamDetected": True,
                 "totalMessagesExchanged": len(history) + 1,
                 "extractedIntelligence": ext_intel.model_dump(),
                 "agentNotes": intel.get("agentNotes", "Scammer engaged.")
             }
-            background_tasks.add_task(send_guvi_callback_async, request.get_session_id(), callback_payload)
+            background_tasks.add_task(send_guvi_callback_async, message_request.get_session_id(), callback_payload)
         
         # v1.2 Titanium: Calculate latency
         latency_ms = int((time() - start_time) * 1000)
