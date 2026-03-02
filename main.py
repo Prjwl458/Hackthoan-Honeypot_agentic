@@ -434,18 +434,23 @@ async def handle_message(
                 return list(val.values())
             return val if isinstance(val, list) else []
         
-        ext_intel = IntelligenceData(
-            bankAccounts=ensure_list(intel.get("bankAccounts", [])),
-            upiIds=ensure_list(intel.get("upiIds", [])),
-            phishingLinks=ensure_list(intel.get("phishingLinks", [])),
-            phoneNumbers=ensure_list(intel.get("phoneNumbers", [])),
-            suspiciousKeywords=ensure_list(intel.get("suspiciousKeywords", [])),
-            agentNotes=intel.get("agentNotes", ""),
-            scamType=intel.get("scamType", "Unknown"),
-            urgencyLevel=intel.get("urgencyLevel", "Low"),
-            riskScore=intel.get("riskScore", 0),
-            extractedEntities=ensure_list(intel.get("extractedEntities", []))
-        )
+        # Build clean intel dict for logging and response
+        intel_dict = {
+            "bankAccounts": ensure_list(intel.get("bankAccounts", [])),
+            "upiIds": ensure_list(intel.get("upiIds", [])),
+            "phishingLinks": ensure_list(intel.get("phishingLinks", [])),
+            "phoneNumbers": ensure_list(intel.get("phoneNumbers", [])),
+            "suspiciousKeywords": ensure_list(intel.get("suspiciousKeywords", [])),
+            "agentNotes": intel.get("agentNotes", ""),
+            "scamType": intel.get("scamType", "Unknown"),
+            "urgencyLevel": intel.get("urgencyLevel", "Low"),
+            "riskScore": intel.get("riskScore", 0),
+            "extractedEntities": ensure_list(intel.get("extractedEntities", []))
+        }
+        
+        logger.info(f"FINAL INTEL OBJECT: {intel_dict}")
+        
+        ext_intel = IntelligenceData(**intel_dict)
         
         # Only send callback if scam detected
         is_scam = intel.get("riskScore", 0) > 30
@@ -460,10 +465,11 @@ async def handle_message(
             background_tasks.add_task(send_guvi_callback_async, request.get_session_id(), callback_payload)
         
         # Step 4: Return response with full intelligence (ALWAYS)
+        logger.info(f"RETURNING RESPONSE: reply={reply}, intel={intel_dict}")
         return HoneypotResponse(
             status="success",
             reply=reply,  # This is now the Summary Verdict
-            intelligence=ext_intel
+            intelligence=intel_dict
         )
     
     except Exception as e:
