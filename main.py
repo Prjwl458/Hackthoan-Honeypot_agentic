@@ -244,7 +244,18 @@ async def send_guvi_callback_async(session_id: str, payload: dict):
     """
     Async callback to GUVI webhook.
     Uses httpx.AsyncClient for non-blocking HTTP request.
+    
+    Validates URL format and handles empty environment variables gracefully.
     """
+    # Validate callback URL exists and is properly formatted
+    if not GUVI_CALLBACK_URL:
+        logger.debug(f"GUVI Callback skipped: No callback URL configured")
+        return
+    
+    if not GUVI_CALLBACK_URL.startswith("http"):
+        logger.warning(f"GUVI Callback skipped: Invalid URL format - {GUVI_CALLBACK_URL}")
+        return
+    
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(GUVI_CALLBACK_URL, json=payload)

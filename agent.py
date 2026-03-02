@@ -14,6 +14,97 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def pre_process_message(message: str) -> Optional[Dict[str, Any]]:
+    """
+    Pre-process message using regex patterns to detect safe/transactional messages.
+    
+    This whitelist approach avoids calling the LLM for known-safe patterns,
+    saving latency and API costs.
+    
+    Args:
+        message: The incoming message to analyze
+    
+    Returns:
+        Dictionary with risk score and scam type if matched, None if no match
+    
+    Patterns:
+        - OTP: 4-6 digit codes with verification keywords
+        - Bank Update: Account balance notifications
+    """
+    message_lower = message.lower()
+    
+    # OTP Pattern: 4-6 digit code with keywords
+    otp_pattern = r'\b\d{4,6}\b'
+    otp_keywords = ['otp', 'verification', 'code', 'entered', 'submitted']
+    if re.search(otp_pattern, message) and any(kw in message_lower for kw in otp_keywords):
+        return {
+            "riskScore": 5,
+            "scamType": "Safe/Transactional",
+            "urgencyLevel": "Low",
+            "agentNotes": "OTP/Verification code - Legitimate transactional message",
+            "extractedEntities": [],
+            "bankAccounts": [],
+            "upiIds": [],
+            "phishingLinks": [],
+            "phoneNumbers": [],
+            "suspiciousKeywords": []
+        }
+    
+    # Banking Pattern: Account balance updates
+    bank_keywords = ['available', 'balance', 'credited', 'debited', 'a/c', 'account']
+    if any(kw in message_lower for kw in bank_keywords) and ('rs.' in message_lower or '₹' in message):
+        return {
+            "riskScore": 10,
+            "scamType": "Bank Update",
+            "urgencyLevel": "Low",
+            "agentNotes": "Bank balance notification - Legitimate informational message",
+            "extractedEntities": [],
+            "bankAccounts": [],
+            "upiIds": [],
+            "phishingLinks": [],
+            "phoneNumbers": [],
+            "suspiciousKeywords": []
+        }
+    
+    return None  # No whitelist match - proceed to LLM analysis
+
+
+def apply_evidence_guard(intel: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Evidence Guard: Post-processing safety override.
+    
+    If the AI suggests high risk (>70) but there's NO physical evidence
+    (links, UPI IDs, bank accounts), cap the risk score and adjust verdict.
+    
+    This prevents false positives from urgency language alone.
+    
+    Args:
+        intel: Intelligence dictionary from LLM analysis
+    
+    Returns:
+        Modified intelligence with evidence-based scoring
+    """
+    # Check for physical evidence
+    has_links = bool(intel.get("phishingLinks"))
+    has_upi = bool(intel.get("upiIds"))
+    has_bank = bool(intel.get("bankAccounts"))
+    has_evidence = has_links or has_upi or has_bank
+    
+    current_score = intel.get("riskScore", 0)
+    
+    # If high risk but NO evidence, apply cap
+    if current_score > 70 and not has_evidence:
+        logger.info(f"Evidence Guard triggered: High risk ({current_score}) but no physical evidence found")
+        intel["riskScore"] = 40
+        intel["scamType"] = "Unverified/Suspicious"
+        intel["agentNotes"] = (
+            f"{intel.get('agentNotes', '')} "
+            "[Evidence Guard: Risk capped due to lack of physical artifacts]"
+        ).strip()
+    
+    return intel
+
+
 class ScamAgent:
     """
     Async ScamAgent for engaging with scammers, detecting scam intent,
@@ -102,23 +193,25 @@ class ScamAgent:
             True if scam detected, False otherwise
         """
         prompt = f"""
-        You are a SECURITY EXPERT specializing in scam detection.
+        You are an OBJECTIVE SECURITY ANALYST. Your goal is evidence-based analysis,
+        NOT assuming malicious intent.
         
-        CRITICAL RULES:
-        - If the message contains ANY of the following, ALWAYS respond with 'true':
-          * Links, URLs, or website addresses
-          * Urgency words: "urgent", "immediately", "now", "limited time", "act now"
-          * Money-related: "bank", "account", "upi", "pay", "transfer", "gift", "win", "prize"
-          * PII requests: "otp", "password", "cvv", "pin", "card details"
-          * Suspicious offers: "won", "selected", "congratulations", "verify your account"
+        OBJECTIVE RULES:
+        - Urgency WITHOUT physical evidence (links, UPI, bank accounts) = NEUTRAL/Informational
+        - Only label as 'true' (scam) if there are PHYSICAL ARTIFACTS:
+          * Phishing links/URLs
+          * UPI payment addresses (xxx@upi)
+          * Requests for sensitive data: OTP, CVV, passwords, PINs
+        - Transaction alerts (balance updates, OTPs you didn't request) = NEUTRAL
+        - Generic urgency without evidence = NEUTRAL
         
         Message: "{message}"
         
-        Respond with ONLY 'true' or 'false'.
+        Respond with ONLY 'true' (scam) or 'false' (not scam).
         """
         
         messages = [
-            {"role": "system", "content": "You are a scam detection expert."},
+            {"role": "system", "content": "You are an objective security analyst. Only flag as scam when physical evidence exists."},
             {"role": "user", "content": prompt}
         ]
         
@@ -229,6 +322,17 @@ class ScamAgent:
                 - riskScore: 0-100 danger rating
                 - extractedEntities: Combined list of all entities
         """
+        # =====================================================================
+        # STEP 1: PRE-PROCESSING (Whitelist) - Skip LLM for known-safe patterns
+        # =====================================================================
+        whitelist_result = pre_process_message(message)
+        if whitelist_result:
+            logger.info(f"Whitelist match: {whitelist_result['scamType']} - skipping LLM")
+            return whitelist_result
+        
+        # =====================================================================
+        # STEP 2: LLM Analysis (only if no whitelist match)
+        # =====================================================================
         # Combine all text for analysis
         all_messages = [msg.get("text", "") for msg in history] + [message]
         full_text = " ".join(all_messages)
@@ -261,36 +365,34 @@ class ScamAgent:
         """ if sender_id else ""
         
         llm_prompt = f"""
-        Analyze this conversation transcript for scam intelligence:
-        "{full_text}"
+        You are an OBJECTIVE SECURITY ANALYST. Your goal is evidence-based analysis.
+        
+        OBJECTIVE ANALYSIS RULES:
+        - Urgency WITHOUT physical evidence (links, UPI IDs, bank accounts) = Informational/Neutral
+        - Transaction alerts (balance updates, OTPs you didn't request) = Informational
+        - Generic warnings without actionable links = Informational
+        - Only HIGH risk if there are PHYSICAL ARTIFACTS: phishing links, UPI payment requests, PII theft attempts
+        
+        Analyze this message: "{full_text}"
         {sender_check}
         
         Your tasks:
-        1. Identify Intent: Is the scammer trying to create urgency, ask for sensitive data, or offering something too good to be true?
-        2. Generic Extraction: Extract any names of banks, financial apps (like UPI, WhatsApp, YONO), or specific types of sensitive data requested (OTP, CVV, PIN, passwords).
-        3. Dynamic Keyword Logic: Identify any specific words or phrases that convey pressure, fear, or excitement as 'suspiciousKeywords'.
-        4. Classify Scam Type: Choose ONE from: Phishing, Lottery, Tech Support, Investment, Romance, Other
-        5. Assess Urgency: Rate as Low, Medium, or High based on time pressure words
-        6. Calculate Risk Score: Rate 1-100 based on danger level (higher = more dangerous)
-        7. SENDER VERIFICATION (IMPORTANT): If sender_id is provided, check if it matches the content:
-           - If message mentions "Bank" but sender is personal number (not official bank shortcode), ADD 20 to riskScore
-           - If message claims to be from "HDFC/ICICI/SBI" but sender is regular number, ADD 20 to riskScore
-           - If sender looks like personal phone (+91xxx) but claims institutional affiliation, ADD 15 to riskScore
-           - Note this in agentNotes
-
+        1. Extract entities: UPI IDs, phone numbers, links, bank accounts
+        2. Identify request type: informational, transactional, or malicious
+        3. Classify: Safe/Transactional, Bank Update, Phishing, Lottery, Tech Support, Investment, Romance, Other
+        4. Assess Urgency: Low (informational), Medium (needs attention), High (immediate action required)
+        5. Risk Score:
+           - 1-20: Safe/Transactional (bank alerts, OTPs you expect)
+           - 21-40: Low Risk (promotional content)
+           - 41-60: Medium Risk (urgency but no payment links)
+           - 61-80: High Risk (payment links, PII requests)
+           - 81-100: Critical (active fraud in progress)
+        
         Return ONLY a raw JSON object with these exact keys: 
-        bankAccounts (list), 
-        upiIds (list), 
-        phishingLinks (list), 
-        phoneNumbers (list), 
-        suspiciousKeywords (list), 
-        agentNotes (string summary: include the intent identified and any financial entities/apps found),
-        scamType (string: Phishing/Lottery/Tech Support/Investment/Romance/Other),
-        urgencyLevel (string: Low/Medium/High),
-        riskScore (integer: 1-100),
-        extractedEntities (list: combine all UPI IDs, phone numbers, and links found)
-
-        DO NOT include any explanation or markdown formatting like ```json.
+        bankAccounts, upiIds, phishingLinks, phoneNumbers, suspiciousKeywords,
+        agentNotes, scamType, urgencyLevel, riskScore, extractedEntities
+        
+        DO NOT include any explanation or markdown formatting.
         """
         
         messages = [{"role": "user", "content": llm_prompt}]
@@ -365,5 +467,10 @@ class ScamAgent:
             intel["threatSource"] = sender_id
         else:
             intel["threatSource"] = ""
+        
+        # =====================================================================
+        # STEP 3: EVIDENCE GUARD - Post-processing safety override
+        # =====================================================================
+        intel = apply_evidence_guard(intel)
         
         return intel

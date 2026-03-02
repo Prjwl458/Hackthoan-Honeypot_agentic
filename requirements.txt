@@ -1,5 +1,4 @@
 # Production-locked requirements for Security Scanner API
-# Generated for Prajwal's Class 11 Portfolio Project
 # These versions have pre-built binaries and compatible driver versions
 
 pymongo==4.6.3
