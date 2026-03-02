@@ -252,49 +252,112 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
     return provided_key
 
 
-def finalize_intelligence(intel: Dict[str, Any], reply: str) -> tuple:
+def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str = "") -> tuple:
     """
-    Finalize intelligence with synchronization rules.
+    Finalize intelligence with STRICT validation rules - THE FINAL GATE.
     
-    Rule 1 - Boolean Sync: isPhishing = True if riskScore > 0
-    Rule 2 - Note-Evidence Link: agentNotes MUST mention extracted artifacts
-    Rule 3 - Reply-Score Sync: reply must match riskScore category
+    These overrides happen LAST to correct any AI hallucinations.
+    
+    Rule 1 - Evidence Mandate: Physical evidence = High risk + isPhishing
+    Rule 2 - Transactional Safeguard: OTP without danger keywords = Safe
+    Rule 3 - Headline Sync: Reply prefix matches risk category
+    
+    Args:
+        intel: Intelligence dictionary from AI or whitelist
+        reply: Current reply text
+        message_text: Original message for OTP pattern detection
     
     Returns:
         tuple: (updated_intel, updated_reply)
     """
-    # Rule 1: Boolean Sync
-    intel["isPhishing"] = intel.get("riskScore", 0) > 0
+    message_lower = message_text.lower()
+    risk_score = intel.get("riskScore", 0)
     
-    # Rule 2: Note-Evidence Link - Add evidence mentions to agentNotes
-    evidence_parts = []
+    # =========================================================================
+    # RULE 2: Transactional Safeguard (Check FIRST - overrides everything)
+    # =========================================================================
+    # If message contains OTP but NO dangerous keywords, FORCE safe classification
+    has_otp = "otp" in message_lower or "verification code" in message_lower
+    has_dangerous = any(kw in message_lower for kw in ["forward", "share", "send to", "share this", "send this"])
+    
+    if has_otp and not has_dangerous:
+        # FORCE safe classification - this is a transactional message
+        intel["isPhishing"] = False
+        intel["riskScore"] = 5  # Must be < 10
+        intel["scamType"] = "Safe/Transactional"
+        intel["urgencyLevel"] = "Low"
+        intel["agentNotes"] = "Transactional OTP message - No phishing detected"
+        # Clear any extracted artifacts for safe messages
+        intel["phishingLinks"] = []
+        intel["upiIds"] = []
+        intel["bankAccounts"] = []
+        intel["suspiciousKeywords"] = []
+        
+        # Headline for safe
+        reply = "✅ Safe: Legitimate transactional message (OTP/Verification)"
+        return intel, reply
+    
+    # =========================================================================
+    # RULE 1: Evidence Mandate (Physical evidence exists)
+    # =========================================================================
     phishing_links = intel.get("phishingLinks", [])
     upi_ids = intel.get("upiIds", [])
     bank_accounts = intel.get("bankAccounts", [])
     
-    if phishing_links and len(phishing_links) > 0 and phishing_links[0]:
-        evidence_parts.append(f"Detected suspicious link: {phishing_links[0]}")
-    if upi_ids and len(upi_ids) > 0 and upi_ids[0]:
-        evidence_parts.append(f"Detected UPI ID: {upi_ids[0]}")
-    if bank_accounts and len(bank_accounts) > 0 and bank_accounts[0]:
-        evidence_parts.append(f"Detected bank account: {bank_accounts[0]}")
+    has_physical_evidence = (
+        (phishing_links and len(phishing_links) > 0 and phishing_links[0]) or
+        (upi_ids and len(upi_ids) > 0 and upi_ids[0]) or
+        (bank_accounts and len(bank_accounts) > 0 and bank_accounts[0])
+    )
     
-    if evidence_parts:
-        original_notes = intel.get("agentNotes", "")
+    if has_physical_evidence:
+        # FORCE high-risk classification
+        intel["isPhishing"] = True
+        intel["riskScore"] = max(risk_score, 75)  # MUST be > 60
+        intel["urgencyLevel"] = "High"
+        
+        # Build evidence note
+        evidence_parts = []
+        if phishing_links and len(phishing_links) > 0 and phishing_links[0]:
+            evidence_parts.append(f"Detected {len(phishing_links)} suspicious link(s): {phishing_links[0]}")
+        if upi_ids and len(upi_ids) > 0 and upi_ids[0]:
+            evidence_parts.append(f"Detected {len(upi_ids)} UPI ID(s): {upi_ids[0]}")
+        if bank_accounts and len(bank_accounts) > 0 and bank_accounts[0]:
+            evidence_parts.append(f"Detected {len(bank_accounts)} bank account(s): {bank_accounts[0]}")
+        
         evidence_str = " | ".join(evidence_parts)
-        if original_notes and evidence_str not in original_notes:
-            intel["agentNotes"] = f"{evidence_str}. {original_notes}"
-        else:
-            intel["agentNotes"] = evidence_str
+        intel["agentNotes"] = f"EVIDENCE DETECTED: {evidence_str}. Proceed with caution."
+        intel["scamType"] = "Confirmed Phishing/Scam"
+        
+        # Headline for danger
+        reply = f"❌ Danger: {intel['agentNotes'][:80]}..."
+        return intel, reply
     
-    # Rule 3: Reply-Score Sanitization
-    risk_score = intel.get("riskScore", 0)
+    # =========================================================================
+    # RULE 3: Headline Sync (No special cases - standard risk-based prefix)
+    # =========================================================================
+    # Re-evaluate isPhishing based on final risk score
+    intel["isPhishing"] = risk_score > 0
+    
+    # Build headline reply based on risk category
     if 0 <= risk_score <= 10:
-        reply = "Safe/Transactional"
+        prefix = "✅ Safe:"
+        category = "Safe/Transactional"
     elif 11 <= risk_score <= 50:
-        reply = "Suspicious/Unverified"
+        prefix = "⚠️ Warning:"
+        category = "Suspicious/Unverified"
     else:  # 51-100
-        reply = "Confirmed Phishing/Scam"
+        prefix = "❌ Danger:"
+        category = "Confirmed Phishing/Scam"
+    
+    # Update scamType to match category
+    intel["scamType"] = category
+    
+    # Build the headline reply
+    notes = intel.get("agentNotes", "Analysis complete")
+    # Truncate notes for headline if too long
+    short_notes = notes[:60] + "..." if len(notes) > 60 else notes
+    reply = f"{prefix} {short_notes}"
     
     return intel, reply
 
@@ -405,7 +468,7 @@ async def handle_message(
         })
         # Apply synchronization rules (isPhishing, reply-score sync)
         reply_text = intel_response["agentNotes"]
-        intel_response, reply_text = finalize_intelligence(intel_response, reply_text)
+        intel_response, reply_text = finalize_intelligence(intel_response, reply_text, message_text)
         
         # Return complete response matching the AI flow structure
         return HoneypotResponse(
@@ -524,7 +587,7 @@ async def handle_message(
         }
         
         # Apply Synchronization Rules: Boolean Sync, Note-Evidence Link, Reply-Score Sanitization
-        intel_dict, reply = finalize_intelligence(intel_dict, reply)
+        intel_dict, reply = finalize_intelligence(intel_dict, reply, message_text)
         
         logger.info(f"FINAL INTEL OBJECT: {intel_dict}")
         

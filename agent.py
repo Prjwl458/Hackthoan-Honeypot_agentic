@@ -406,9 +406,28 @@ class ScamAgent:
         """ if sender_id else ""
         
         llm_prompt = f"""
-        You are an OBJECTIVE SECURITY ANALYST. Your goal is evidence-based analysis.
+        You are an OBJECTIVE SECURITY ANALYST. Your analysis will be validated by strict post-processing rules.
         
-        OBJECTIVE ANALYSIS RULES:
+        ===================================================================
+        STRICT VALIDATION RULES (Your output WILL be corrected by these rules):
+        ===================================================================
+        
+        RULE 1 - EVIDENCE MANDATE:
+        - If phishingLinks, upiIds, OR bankAccounts are found → riskScore MUST be > 60, isPhishing = true
+        - Physical evidence overrides ALL other scoring considerations
+        
+        RULE 2 - TRANSACTIONAL SAFEGUARD:
+        - If message contains "OTP" or "verification code" WITHOUT "forward"/"share" → Safe/Transactional
+        - Never flag legitimate OTPs as scams
+        
+        RULE 3 - HEADLINE SYNC:
+        - Risk 0-10: Reply prefixed with "✅ Safe:"
+        - Risk 11-50: Reply prefixed with "⚠️ Warning:"
+        - Risk 51-100: Reply prefixed with "❌ Danger:"
+        
+        ===================================================================
+        ANALYSIS GUIDELINES:
+        ===================================================================
         - Urgency WITHOUT physical evidence (links, UPI IDs, bank accounts) = Informational/Neutral
         - Transaction alerts (balance updates, OTPs you didn't request) = Informational
         - Generic warnings without actionable links = Informational
@@ -422,7 +441,7 @@ class ScamAgent:
         2. Identify request type: informational, transactional, or malicious
         3. Classify: Safe/Transactional, Bank Update, Phishing, Lottery, Tech Support, Investment, Romance, Other
         4. Assess Urgency: Low (informational), Medium (needs attention), High (immediate action required)
-        5. Risk Score:
+        5. Risk Score (will be validated by above rules):
            - 1-20: Safe/Transactional (bank alerts, OTPs you expect)
            - 21-40: Low Risk (promotional content)
            - 41-60: Medium Risk (urgency but no payment links)
