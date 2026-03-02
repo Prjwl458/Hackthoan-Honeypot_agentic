@@ -139,6 +139,21 @@ EXPECTED_KEY = os.getenv("API_KEY", "prajwal_hackathon_key_2310")
 GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "")
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 
+# Default intelligence template for consistent API responses
+DEFAULT_INTEL = {
+    "bankAccounts": [],
+    "upiIds": [],
+    "phishingLinks": [],
+    "phoneNumbers": [],
+    "suspiciousKeywords": [],
+    "agentNotes": "",
+    "scamType": "Safe/Transactional",
+    "urgencyLevel": "Low",
+    "riskScore": 5,
+    "extractedEntities": [],
+    "threatSource": "System"
+}
+
 
 # =============================================================================
 # Exception Handlers
@@ -332,11 +347,19 @@ async def handle_message(
     whitelist_result = pre_process_message(message_text)
     if whitelist_result:
         logger.info(f"WHITELIST HIT: {whitelist_result.get('scamType')} - returning immediately")
-        # Build full API response with whitelist result
+        # Build full intelligence from template with whitelist values
+        intel_response = DEFAULT_INTEL.copy()
+        intel_response.update({
+            "scamType": whitelist_result.get("scamType", "Safe/Transactional"),
+            "riskScore": whitelist_result.get("riskScore", 5),
+            "agentNotes": whitelist_result.get("agentNotes", "Safe message detected"),
+            "urgencyLevel": whitelist_result.get("urgencyLevel", "Low")
+        })
+        # Return complete response matching the AI flow structure
         return HoneypotResponse(
             status="success",
-            reply=whitelist_result.get("agentNotes", "Safe message detected"),
-            intelligence=whitelist_result
+            reply=intel_response["agentNotes"],
+            intelligence=intel_response
         )
     
     history = request.get_conversation_history()
