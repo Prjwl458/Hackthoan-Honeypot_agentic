@@ -81,29 +81,50 @@ def apply_evidence_guard(intel: Dict[str, Any]) -> Dict[str, Any]:
     This prevents false positives from urgency language alone.
     
     Args:
-        intel: Intelligence dictionary from LLM analysis
+        intel: Intelligence dictionary from LLM analysis (can be dict or Pydantic)
     
     Returns:
         Modified intelligence with evidence-based scoring
     """
+    # Handle both dict and Pydantic object
+    if hasattr(intel, 'get'):
+        # It's a dict-like object
+        phishing_links = intel.get("phishingLinks", [])
+        upi_ids = intel.get("upiIds", [])
+        bank_accounts = intel.get("bankAccounts", [])
+        risk_score = intel.get("riskScore", 0)
+        scam_type = intel.get("scamType", "")
+        agent_notes = intel.get("agentNotes", "")
+    else:
+        # It's a Pydantic object or other
+        phishing_links = getattr(intel, 'phishingLinks', [])
+        upi_ids = getattr(intel, 'upiIds', [])
+        bank_accounts = getattr(intel, 'bankAccounts', [])
+        risk_score = getattr(intel, 'riskScore', 0)
+        scam_type = getattr(intel, 'scamType', "")
+        agent_notes = getattr(intel, 'agentNotes', "")
+    
     # Check for physical evidence
-    has_links = bool(intel.get("phishingLinks"))
-    has_upi = bool(intel.get("upiIds"))
-    has_bank = bool(intel.get("bankAccounts"))
+    has_links = bool(phishing_links)
+    has_upi = bool(upi_ids)
+    has_bank = bool(bank_accounts)
     has_evidence = has_links or has_upi or has_bank
     
-    current_score = intel.get("riskScore", 0)
+    current_score = risk_score
     logger.info(f"EVIDENCE CHECK: score={current_score}, has_links={has_links}, has_upi={has_upi}, has_bank={has_bank}")
     
     # If high risk but NO evidence, apply cap
     if current_score > 70 and not has_evidence:
         logger.info(f"EVIDENCE GUARD TRIGGERED: High risk ({current_score}) but no physical evidence found - capping score")
-        intel["riskScore"] = 40
-        intel["scamType"] = "Unverified/Suspicious"
-        intel["agentNotes"] = (
-            f"{intel.get('agentNotes', '')} "
-            "[Evidence Guard: Risk capped due to lack of physical artifacts]"
-        ).strip()
+        # Update the intel object
+        if hasattr(intel, '__setitem__'):
+            intel["riskScore"] = 40
+            intel["scamType"] = "Unverified/Suspicious"
+            intel["agentNotes"] = f"{agent_notes} [Evidence Guard: Risk capped due to lack of physical artifacts]"
+        else:
+            intel.riskScore = 40
+            intel.scamType = "Unverified/Suspicious"
+            intel.agentNotes = f"{agent_notes} [Evidence Guard: Risk capped due to lack of physical artifacts]"
     
     return intel
 

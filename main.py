@@ -332,22 +332,11 @@ async def handle_message(
     whitelist_result = pre_process_message(message_text)
     if whitelist_result:
         logger.info(f"WHITELIST HIT: {whitelist_result.get('scamType')} - returning immediately")
-        ext_intel = IntelligenceData(
-            bankAccounts=whitelist_result.get("bankAccounts", []),
-            upiIds=whitelist_result.get("upiIds", []),
-            phishingLinks=whitelist_result.get("phishingLinks", []),
-            phoneNumbers=whitelist_result.get("phoneNumbers", []),
-            suspiciousKeywords=whitelist_result.get("suspiciousKeywords", []),
-            agentNotes=whitelist_result.get("agentNotes", ""),
-            scamType=whitelist_result.get("scamType", "Unknown"),
-            urgencyLevel=whitelist_result.get("urgencyLevel", "Low"),
-            riskScore=whitelist_result.get("riskScore", 10),
-            extractedEntities=whitelist_result.get("extractedEntities", [])
-        )
+        # Build full API response with whitelist result
         return HoneypotResponse(
             status="success",
-            response=whitelist_result.get("agentNotes", "Safe message detected"),
-            intelligence=ext_intel
+            reply=whitelist_result.get("agentNotes", "Safe message detected"),
+            intelligence=whitelist_result
         )
     
     history = request.get_conversation_history()
@@ -446,28 +435,6 @@ async def handle_message(
             status="success",
             reply=reply,  # This is now the Summary Verdict
             intelligence=ext_intel
-        )
-        
-    except Exception as e:
-        logger.exception(f"Error processing request: {e}")
-        # Return neutral intelligence with explicit defaults for API consistency
-        neutral_intel = {
-            "bankAccounts": [],
-            "upiIds": [],
-            "phishingLinks": [],
-            "phoneNumbers": [],
-            "suspiciousKeywords": [],
-            "agentNotes": "System error - neutral classification",
-            "scamType": "Unknown",
-            "urgencyLevel": "Low",
-            "riskScore": 0,
-            "extractedEntities": [],
-            "threatSource": sender_id or ""
-        }
-        return HoneypotResponse(
-            status="success",
-            reply="Neutral - Analysis inconclusive due to system error",
-            intelligence=neutral_intel
         )
 
 
