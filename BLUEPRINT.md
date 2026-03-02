@@ -6,43 +6,72 @@ The Agentic AI Honeypot is a cyber-intelligence engine that intercepts scam mess
 
 ---
 
-## 1. The Logic: Sender vs Content Mismatch Detection
+## 1. The Safety Sandwich: Logic Over Bias
 
-### Weighted Analysis System
+Our architecture follows a **three-layer validation pipeline** that prioritizes evidence over assumptions:
 
-The system uses a multi-layered approach to detect scams by analyzing mismatches between the sender's claimed identity and the message content:
-
-| Factor | Weight | Description |
-|--------|--------|-------------|
-| Sender Identity Mismatch | 30% | Does sender phone match claimed entity? |
-| Urgency Language | 25% | Contains threats, deadlines, "act now" |
-| Suspicious Keywords | 20% | Bank, OTP, account suspended, verify |
-| Link Analysis | 15% | Shortened URLs, suspicious domains |
-| Request Type | 10% | Money request, credentials, OTPs |
-
-### Scoring Algorithm
+### The Pipeline Flow
 
 ```
-Risk Score = Σ(factor_score × weight) / 100
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  PRE-PROCESS    │────▶│     PROCESS     │────▶│  POST-PROCESS   │
+│   (Whitelist)   │     │  (AI Analysis)  │     │ (Evidence Guard)│
+└─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-- **0-30**: Low Risk - Legitimate message
-- **31-60**: Medium Risk - Requires verification
-- **61-100**: High Risk - Confirmed scam
+#### Layer 1: Pre-Process (Whitelist)
+**Purpose**: Fast-path legitimate messages to avoid LLM costs and latency
 
-### Example Mismatch Detection
+| Pattern | Detection | Result |
+|---------|-----------|--------|
+| OTP | `[0-9]{4,6}` + "verification/code" keywords | Risk: 5, Type: Safe/Transactional |
+| Bank Update | "A/C XX" + "debited/credited" + balance | Risk: 10, Type: Bank Update |
+
+If matched, the request returns immediately with a standardized safe classification.
+
+#### Layer 2: Process (AI Analysis)
+**Purpose**: Deep analysis for non-whitelist messages
+
+The LLM performs evidence-based scoring:
+- Extracts physical artifacts: URLs, UPI IDs, bank accounts
+- Analyzes intent without assuming malicious behavior
+- Returns structured intelligence with riskScore
+
+#### Layer 3: Post-Process (Evidence Guard)
+**Purpose**: Prevent false positives from urgency language alone
+
+**The Evidence Requirement Rule**:
+```
+IF riskScore > 70 
+   AND phishingLinks == [] 
+   AND upiIds == [] 
+   AND bankAccounts == []:
+       riskScore = 40 (HARD CAP)
+       scamType = "Unverified/Suspicious"
+```
+
+A message CANNOT exceed Risk 40 without at least one physical artifact.
+
+### Artifact-Based Scoring Matrix
+
+| Evidence Present | Max Risk | Classification |
+|------------------|----------|----------------|
+| None | 40 | Unverified/Suspicious |
+| Links only | 60 | Potential Phishing |
+| UPI/Bank + Links | 80 | High Risk Scam |
+| All artifacts + PII request | 100 | Critical Threat |
+
+### Example: Evidence-Based Detection
 
 ```
-Input: Message from +91-9876543210 claiming to be Netflix Support
-       Content: "Your account suspended. Click netflix-verify.com to restore"
+Input: "URGENT: Your account will be suspended in 24 hours! Call now!"
 
 Analysis:
-├── Sender: +91-9876543210 (not Netflix official number) → MISMATCH
-├── Keywords: "account suspended", "verify" → HIGH
-├── Link: netflix-verify.com (not netflix.com) → PHISHING
-└── Urgency: "suspended" creates false urgency → HIGH
+├── No phishing links extracted → No physical evidence
+├── Urgency keywords detected → AI suggests Risk: 85
+└── EVIDENCE GUARD triggers → Caps Risk: 40
 
-Result: Risk Score = 85 → PHISHING SCAM DETECTED
+Result: Risk Score = 40 → Unverified/Suspicious (not confirmed scam)
 ```
 
 ---
@@ -184,7 +213,55 @@ def check_rate_limit(session_id: str, max_requests: int = 10, window_seconds: in
 
 ---
 
-## 4. Future Frontend: Expo Mobile App Integration
+## 4. Data Integrity Protocol: The Guardian of the Schema
+
+### The `ensure_list` Sanitization Helper
+
+LLMs are probabilistic and may return data in unexpected formats. The `ensure_list` function acts as a **schema guardian**, preventing 400 Bad Request errors by forcing AI-generated dictionaries into Pydantic-compliant lists.
+
+```python
+def ensure_list(val):
+    if isinstance(val, dict):
+        return list(val.values())  # Extract values from dict
+    return val if isinstance(val, list) else []
+```
+
+**Applied to all array fields:**
+- `bankAccounts` - Account numbers (may come as {"account": "123456"})
+- `upiIds` - Payment addresses (may come as {"upi": "user@upi"})
+- `phishingLinks` - Malicious URLs
+- `phoneNumbers` - Contact numbers (may come as {"sender": "PowerCorp"})
+- `suspiciousKeywords` - Risk indicators
+- `extractedEntities` - Combined entities
+
+**Why this matters:**
+The AI might return `phoneNumbers: {"sender": "PowerCorp"}` instead of `phoneNumbers: ["PowerCorp"]`. Without sanitization, Pydantic validation fails with:
+```
+ValidationError: Input should be a valid list
+```
+
+### MongoDB Update Strategy: The $each Array Contract
+
+MongoDB's `$addToSet` operator requires arrays for the `$each` modifier. Our update operations strictly enforce this:
+
+```python
+# CORRECT - Array passed to $each
+{"$addToSet": {"intelligence.phishingLinks": {"$each": ["link1.com", "link2.com"]}}}
+
+# INCORRECT - Dict passed to $each (causes MongoDB error)
+{"$addToSet": {"intelligence.phishingLinks": {"$each": {"0": "link1.com"}}}}
+```
+
+**Database Reliability Rules:**
+1. All `$addToSet` operations use `ensure_list` before passing to `$each`
+2. Arrays are validated to be actual lists (not dictionaries with numeric keys)
+3. Empty or invalid data defaults to `[]` to maintain schema consistency
+
+This ensures MongoDB updates never fail due to type mismatches, maintaining database integrity across all scam intelligence records.
+
+---
+
+## 5. Future Frontend: Expo Mobile App Integration
 
 ### API-First Design
 

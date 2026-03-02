@@ -4,38 +4,55 @@ A production-grade FastAPI application that intercepts scam messages, analyzes t
 
 ## 🚀 Features
 
-- **Real-time Scam Detection** - AI-powered analysis using Llama 3.1
+- **Evidence-Based Scoring** - No message exceeds Risk 40 without physical artifacts (links, UPI, bank accounts)
+- **Safety Sandwich Pipeline** - Three-layer validation: Whitelist → AI Analysis → Evidence Guard
+- **Real-time Scam Detection** - AI-powered analysis using Llama 3.1 with objective scoring
 - **Intelligence Extraction** - Bank accounts, UPI IDs, phone numbers, phishing links
-- **Sender Verification** - Cross-references sender claims with message content
-- **Risk Scoring** - Urgency level and threat assessment
 - **MongoDB Persistence** - Cloud database with in-memory fallback
 - **Rate Limiting** - 10 requests/minute per session
 - **Production Ready** - Global error handling, health checks, CORS enabled
 
-## 🏗️ System Architecture
+## 🏗️ System Architecture (The Safety Sandwich)
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Mobile App    │────▶│   FastAPI API    │────▶│   Llama 3.1    │
-│   (Expo/React)  │     │   (Port 9000)    │     │   (OpenRouter) │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-                               │
-                               ▼
-                        ┌──────────────────┐
-                        │   MongoDB Atlas  │
-                        │   (scam_logs)    │
-                        └──────────────────┘
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Mobile App    │────▶│   PRE-PROCESS   │────▶│     PROCESS     │────▶│  POST-PROCESS   │
+│   (Expo/React)  │     │   (Whitelist)   │     │  (AI Analysis)  │     │ (Evidence Guard)│
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                                │
+                                                                ▼
+                         ┌──────────────────┐             ┌──────────────────┐
+                         │   MongoDB Atlas  │◀────────────│   Response API   │
+                         │   (scam_logs)    │             │   (Risk Score)   │
+                         └──────────────────┘             └──────────────────┘
 ```
+
+### The Three-Layer Validation Pipeline
+
+| Layer | Purpose | Key Logic |
+|-------|---------|-----------|
+| **Pre-Process** | Fast-path legitimate messages | OTP/Banking patterns → immediate safe classification |
+| **Process** | Deep AI analysis of non-whitelist messages | Evidence-based scoring with LLM |
+| **Post-Process** | Prevent false positives from urgency alone | **Hard cap at Risk 40** without physical artifacts |
+
+### Evidence Requirement Rule
+A message **CANNOT** exceed **Risk 40** unless at least one physical artifact is extracted:
+- `phishingLinks` (suspicious URLs)
+- `upiIds` (payment addresses)
+- `bankAccounts` (account numbers)
+
+This prevents the "Honeypot Bias" where urgency language alone triggers false high-risk classifications.
 
 ### Components
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | Web Framework | FastAPI 0.109.0 | Async API server |
-| LLM Engine | Llama 3.1 8B | Scam detection & analysis |
+| LLM Engine | Llama 3.1 8B | Evidence-based scam analysis |
 | Database | MongoDB Atlas | Persistent intelligence storage |
 | HTTP Client | httpx | Non-blocking API calls |
-| Validation | Pydantic 2.5.3 | Schema enforcement |
+| Validation | Pydantic 2.5.3 | Schema enforcement with `ensure_list` |
+| Data Integrity | `ensure_list` helper | Converts AI dicts to Pydantic-compliant lists |
 
 ## 📦 Setup
 
