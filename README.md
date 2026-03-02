@@ -128,4 +128,4 @@ curl -X POST http://127.0.0.1:9000/message \
 
 ## 📄 License
 
-MIT License - Built for Prajwal's Class 11 Portfolio Project
+MIT License 
