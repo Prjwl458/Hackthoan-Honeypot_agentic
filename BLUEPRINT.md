@@ -103,6 +103,195 @@ Result: Risk Score = 40 → Unverified/Suspicious (not confirmed scam)
 
 The `finalize_intelligence()` function implements **three immutable validation rules** as the FINAL GATE. These rules enforce **100% logical harmony** by correcting AI hallucinations and guaranteeing consistent output.
 
+---
+
+### 2.1 The Deterministic Decision Matrix
+
+Rules are evaluated in **strict priority order** with early-exit behavior. Once a rule triggers, subsequent rules are skipped.
+
+#### Priority Order
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  PRIORITY 1: Rule 2 (OTP Transactional Safeguard)               │
+│  ├── Trigger: 'OTP' in message AND no artifacts AND no danger   │
+│  ├── Action: Force Safe classification (riskScore=5)            │
+│  └── Exit: Returns immediately if triggered                     │
+├─────────────────────────────────────────────────────────────────┤
+│  PRIORITY 2: Rule 1 (Evidence Mandate)                          │
+│  ├── Trigger: phishingLinks OR upiIds OR bankAccounts not empty │
+│  ├── Action: Force High Risk (riskScore≥75, isPhishing=True)    │
+│  ├── Override: Cancels Rule 2 if artifacts found with OTP       │
+│  └── Exit: Returns immediately if triggered                     │
+├─────────────────────────────────────────────────────────────────┤
+│  PRIORITY 3: Rule 3 (Master Boolean Sync)                       │
+│  ├── Trigger: Applied to ALL remaining responses                │
+│  ├── Action: Sync isPhishing to riskScore threshold (30)        │
+│  └── Exit: Always applied as final consistency check            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Override Logic
+
+**Rule 1 Overrides Rule 2 when:**
+- An OTP message ALSO contains a phishing link (e.g., "Your OTP is 1234. Verify at evil.com")
+- An OTP message contains forwarding instructions ("forward", "share")
+
+**Example Override Scenarios:**
+
+| Message | Rule 2 Check | Rule 1 Check | Final Result |
+|---------|--------------|--------------|--------------|
+| "Your OTP is 1234" | ✓ Pass (no artifacts, no danger) | ✗ Skip (no artifacts) | ✅ Safe (Rule 2) |
+| "Your OTP is 1234. Click evil.com" | ✗ Fail (has link) | ✓ Trigger (has link) | ❌ Danger (Rule 1) |
+| "Your OTP is 1234. Forward to agent" | ✗ Fail (has "forward") | ✗ Skip (no artifacts) | ⚠️ Warning (Rule 3) |
+
+---
+
+### 2.2 The 'Zero-Null' Policy
+
+**Guarantee:** `phishingLinks`, `upiIds`, and `bankAccounts` are guaranteed to return an empty list `[]` and **never null**, ensuring frontend stability.
+
+#### Why This Matters
+
+React Native/Expo applications iterating over these arrays will crash if they encounter `null`:
+
+```javascript
+// ❌ CRASH: Cannot read property 'map' of null
+intel.phishingLinks.map(link => <Text>{link}</Text>)
+
+// ✅ SAFE: Empty array returns nothing, no crash
+intel.phishingLinks.map(link => <Text>{link}</Text>)  // Returns [] if empty
+```
+
+#### Implementation
+
+```python
+# ZERO NULLS ENFORCEMENT - First operation in finalize_intelligence()
+intel["phishingLinks"] = intel.get("phishingLinks") or []
+intel["upiIds"] = intel.get("upiIds") or []
+intel["bankAccounts"] = intel.get("bankAccounts") or []
+intel["phoneNumbers"] = intel.get("phoneNumbers") or []
+intel["suspiciousKeywords"] = intel.get("suspiciousKeywords") or []
+```
+
+| Input from AI | Output to Frontend |
+|---------------|-------------------|
+| `null` | `[]` |
+| `undefined` | `[]` |
+| `[]` | `[]` |
+| `["evil.com"]` | `["evil.com"]` |
+
+---
+
+### 2.3 Data Sanitization (The Flattener)
+
+**Purpose:** Ensure `extractedEntities` is always a flat `List[str]` regardless of AI output format.
+
+#### The Problem
+
+LLMs return probabilistic output that often violates Pydantic schemas:
+
+| AI Output Type | Example | Schema Violation |
+|----------------|---------|------------------|
+| Nested Lists | `[['url1', 'url2']]` | `List[List[str]]` instead of `List[str]` |
+| Dict-Wrapped | `[{'link': 'url1'}]` | `List[Dict]` instead of `List[str]` |
+| MongoDB Artifact | `{'0': 'url1', '1': 'url2'}` | `Dict[str, str]` instead of `List[str]` |
+| Null | `None` | `NoneType` instead of `List[str]` |
+
+#### The Solution: `flatten_to_strings()`
+
+```python
+def flatten_to_strings(val):
+    """Recursively flatten nested lists and extract string values."""
+    result = []
+    if isinstance(val, list):
+        for item in val:
+            result.extend(flatten_to_strings(item))  # Recurse into lists
+    elif isinstance(val, dict):
+        for v in val.values():
+            result.extend(flatten_to_strings(v))     # Extract dict values
+    elif isinstance(val, str):
+        result.append(item)                          # Keep strings
+    return result
+```
+
+#### Transformation Examples
+
+| Input | Output | Description |
+|-------|--------|-------------|
+| `[['netflix.com', 'evil.com']]` | `['netflix.com', 'evil.com']` | Unwraps nested list |
+| `[{'link': 'phish.com'}, {'upi': 'user@upi'}]` | `['phish.com', 'user@upi']` | Extracts dict values |
+| `{'0': 'link1', '1': 'link2'}` | `['link1', 'link2']` | Converts MongoDB artifact |
+| `None` | `[]` | Null safety |
+| `'just-a-string'` | `[]` | Non-list input returns empty |
+
+#### Frontend Compatibility
+
+The flattener ensures React Native `FlatList` and `.map()` operations never fail:
+
+```javascript
+// Guaranteed to work - always receives List[str]
+<FlatList
+  data={intel.extractedEntities}  // Always ['item1', 'item2'], never null
+  renderItem={({item}) => <Text>{item}</Text>}
+/>
+```
+
+---
+
+### 2.4 Visual Legend for Frontend
+
+#### Risk Score Mapping Table
+
+| Risk Score | Prefix | Category | Color Code | Icon | Usage |
+|------------|--------|----------|------------|------|-------|
+| 0-29 | `✅ Safe:` | Safe/Transactional | Green (#22c55e) | Checkmark | Legitimate messages |
+| 30-74 | `⚠️ Warning:` | Suspicious/Unverified | Amber (#f59e0b) | Triangle | Review recommended |
+| 75-100 | `❌ Danger:` | Confirmed Phishing/Scam | Red (#ef4444) | X-Circle | Immediate threat |
+
+#### React Native Implementation
+
+```javascript
+const getVisualState = (reply) => {
+  if (reply.startsWith('✅ Safe:')) {
+    return {
+      prefix: '✅ Safe:',
+      color: '#22c55e',
+      bgColor: '#dcfce7',
+      icon: 'checkmark-circle',
+      riskRange: '0-29',
+      action: 'None - Message is safe'
+    };
+  } else if (reply.startsWith('⚠️ Warning:')) {
+    return {
+      prefix: '⚠️ Warning:',
+      color: '#f59e0b',
+      bgColor: '#fef3c7',
+      icon: 'alert-triangle',
+      riskRange: '30-74',
+      action: 'Review message carefully'
+    };
+  } else if (reply.startsWith('❌ Danger:')) {
+    return {
+      prefix: '❌ Danger:',
+      color: '#ef4444',
+      bgColor: '#fee2e2',
+      icon: 'close-circle',
+      riskRange: '75-100',
+      action: 'Block sender immediately'
+    };
+  }
+};
+```
+
+#### Threshold Explanation
+
+- **Threshold 30:** The `isPhishing` boolean flips from `False` to `True`
+- **Threshold 75:** Minimum risk score when physical evidence is detected (Rule 1)
+- **Max 100:** Absolute ceiling for critical social engineering attacks
+
+---
+
 ### Critical Guarantees
 
 | Guarantee | Implementation |

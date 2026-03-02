@@ -14,22 +14,94 @@ A production-grade FastAPI application that intercepts scam messages, analyzes t
 
 ## 🔒 Security Features
 
-### Social Engineering Detection
-The system detects sophisticated **OTP forwarding scams** - attacks that use legitimate-looking OTPs as bait but include dangerous forwarding instructions:
+### The Deterministic Decision Matrix
 
-```python
-# Example: Social Engineering Detection
-Message: "Your OTP is 1234. Forward this to our agent to verify."
-Result: Risk 100 (Critical) - Social Engineering detected
+The system implements **three immutable validation rules** in strict priority order:
 
-Message: "Your OTP is 5678. Do not share with anyone."
-Result: Risk 5 (Safe) - Transactional message
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. OTP Transactional Safeguard (Rule 2)                        │
+│     └── Force Safe (riskScore=5) if OTP without artifacts       │
+├─────────────────────────────────────────────────────────────────┤
+│  2. Evidence Mandate (Rule 1) [OVERRIDES Rule 2]                │
+│     └── Force High Risk (riskScore≥75) if artifacts found       │
+├─────────────────────────────────────────────────────────────────┤
+│  3. Master Boolean Sync (Rule 3)                                │
+│     └── isPhishing = (riskScore >= 30)                          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Keywords monitored:** `forward`, `share with`, `send to`, `share this`, `send this`
+**Override Logic:** Rule 1 (Evidence) overrides Rule 2 (OTP Safeguard) if a phishing link is detected in an OTP message.
+
+### Social Engineering Detection
+
+Detects sophisticated **OTP forwarding scams** - attacks using legitimate-looking OTPs with dangerous forwarding instructions:
+
+| Message | Detection | Result |
+|---------|-----------|--------|
+| "Your OTP is 1234" | No danger keywords | ✅ Safe (Risk 5) |
+| "Your OTP is 1234. Forward to agent" | "forward" detected | ⚠️ Warning (Risk 30+) |
+| "Your OTP is 1234. Click evil.com" | Link detected | ❌ Danger (Risk 75+) |
+
+**Danger Keywords:** `forward`, `share`, `send to`, `share this`, `send this`
+
+### The 'Zero-Null' Policy
+
+All artifact fields are guaranteed to return an empty list `[]` and **never null**, ensuring frontend stability:
+
+```python
+# Implementation
+intel["phishingLinks"] = intel.get("phishingLinks") or []
+intel["upiIds"] = intel.get("upiIds") or []
+intel["bankAccounts"] = intel.get("bankAccounts") or []
+```
+
+| Input | Output |
+|-------|--------|
+| `null` | `[]` |
+| `undefined` | `[]` |
+| `['evil.com']` | `['evil.com']` |
+
+This prevents React Native crashes when iterating over arrays.
+
+### Data Sanitization (The Flattener)
+
+The `flatten_to_strings()` function recursively sanitizes AI output to ensure `extractedEntities` is always `List[str]`:
+
+```python
+# Handles nested structures
+[['url1', 'url2']]           → ['url1', 'url2']
+[{'link': 'url1'}]           → ['url1']
+{'0': 'url1', '1': 'url2'}   → ['url1', 'url2']
+None                         → []
+```
+
+**Frontend Compatibility:**
+```javascript
+// Safe iteration - always works
+intel.extractedEntities.map(item => <Text>{item}</Text>)
+```
+
+### Visual Legend for Frontend
+
+The API returns prefixed replies for direct UI rendering:
+
+| Risk Score | Prefix | Category | Color | Icon | Action |
+|------------|--------|----------|-------|------|--------|
+| 0-29 | `✅ Safe:` | Safe/Transactional | Green | Checkmark | None |
+| 30-74 | `⚠️ Warning:` | Suspicious/Unverified | Amber | Triangle | Review |
+| 75-100 | `❌ Danger:` | Confirmed Phishing/Scam | Red | X-Circle | Block |
+
+**Example Responses:**
+```json
+{"reply": "✅ Safe: Transactional OTP message"}
+{"reply": "⚠️ Warning: Suspicious pattern detected"}
+{"reply": "❌ Danger: Evidence Found: evil.com"}
+```
 
 ### Evidence-Based Risk Capping
-To prevent **"Honeypot Bias"** (where urgency language alone triggers false high-risk classifications), the system implements a **hard risk cap**:
+
+To prevent **"Honeypot Bias"**, the system implements a **hard risk cap**:
 
 | Evidence Present | Max Risk | Classification |
 |------------------|----------|----------------|
@@ -38,26 +110,7 @@ To prevent **"Honeypot Bias"** (where urgency language alone triggers false high
 | UPI/Bank + Links | 80 | High Risk Scam |
 | All artifacts + PII request | 100 | Critical Threat |
 
-**Logic:** A message cannot exceed Risk 40 without at least one physical artifact (phishingLinks, upiIds, bankAccounts).
-
-### Recursive Data Flattening (React Native/Expo Compatible)
-The `ensure_list()` helper function ensures **100% compatibility** with React Native/Expo frontends by recursively sanitizing AI output:
-
-```python
-# Problem: AI returns nested structures that cause Pydantic validation errors
-Input: [['url1', 'url2']] or [{'link': 'url1'}] or {'0': 'link1'}
-
-# Solution: Deep Flat Sanitizer
-Output: ['url1', 'url2']  # Always a flat list of strings
-```
-
-**Applied to all array fields:**
-- `phishingLinks` - URLs extracted from nested AI responses
-- `upiIds` - Payment addresses from dict-wrapped outputs
-- `bankAccounts` - Account numbers from object formats
-- `extractedEntities` - Combined entities (most commonly nested)
-
-This ensures the API never returns `400 Bad Request` errors due to schema mismatches, maintaining seamless mobile app integration.
+A message cannot exceed Risk 40 without at least one physical artifact (phishingLinks, upiIds, bankAccounts).
 
 ## 🏗️ System Architecture (The Safety Sandwich)
 
