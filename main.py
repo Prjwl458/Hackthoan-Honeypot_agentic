@@ -254,21 +254,64 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
 
 def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str = "") -> tuple:
     """
-    Finalize intelligence with STRICT validation rules - THE FINAL GATE.
+    THE FINAL GATE - Enforce hardcoded safety standards before response delivery.
     
-    These overrides happen LAST to correct any AI hallucinations.
+    This function acts as the ultimate validation layer, overriding any AI
+    hallucinations or inconsistent scoring with immutable business rules.
     
-    Rule 1 - Evidence Mandate: Physical evidence = High risk + isPhishing
-    Rule 2 - Transactional Safeguard: OTP without danger keywords = Safe
-    Rule 3 - Headline Sync: Reply prefix matches risk category
+    EXECUTION ORDER (Priority Queue):
+    ---------------------------------
+    1. Transactional Safeguard (Rule 2) - Prevents false positives on OTPs
+    2. Evidence Mandate (Rule 1) - Forces high risk when physical artifacts exist  
+    3. Headline Sync (Rule 3) - Standardizes UI-ready reply prefixes
+    
+    Each rule has early-exit behavior; once triggered, subsequent rules are skipped.
+    
+    VALIDATION RULES:
+    -----------------
+    Rule 1 (Evidence Mandate):
+        Trigger: phishingLinks OR upiIds OR bankAccounts is non-empty
+        Enforcement:
+            - isPhishing = True
+            - riskScore = max(current, 75)  # Forces > 60
+            - urgencyLevel = "High"
+            - scamType = "Confirmed Phishing/Scam"
+            - agentNotes = "EVIDENCE DETECTED: [artifact list]"
+            - reply = "❌ Danger: ..."
+    
+    Rule 2 (Transactional Safeguard):
+        Trigger: "otp" in message AND NOT ("forward" OR "share" in message)
+        Enforcement:
+            - isPhishing = False
+            - riskScore = 5  # Forces < 10
+            - scamType = "Safe/Transactional"
+            - All artifact lists cleared ([])
+            - reply = "✅ Safe: ..."
+    
+    Rule 3 (Headline Sync):
+        Trigger: No early exit from Rules 1 or 2
+        Enforcement:
+            - Risk 0-10: reply = "✅ Safe: [notes]"
+            - Risk 11-50: reply = "⚠️ Warning: [notes]"
+            - Risk 51-100: reply = "❌ Danger: [notes]"
     
     Args:
-        intel: Intelligence dictionary from AI or whitelist
-        reply: Current reply text
-        message_text: Original message for OTP pattern detection
+        intel: Intelligence dictionary containing riskScore, artifacts, and metadata.
+               Expected keys: isPhishing, riskScore, scamType, urgencyLevel,
+               agentNotes, phishingLinks, upiIds, bankAccounts
+        reply: Current reply text from AI or previous processing stage
+        message_text: Original user message for pattern matching (OTP detection)
     
     Returns:
-        tuple: (updated_intel, updated_reply)
+        tuple: (updated_intel_dict, updated_reply_string)
+               updated_intel contains enforced values per active rule
+               updated_reply has standardized prefix for UI rendering
+    
+    Example:
+        >>> intel = {"riskScore": 30, "phishingLinks": ["evil.com"], "isPhishing": False}
+        >>> finalize_intelligence(intel, "Unknown", "Click here")
+        ({"riskScore": 75, "phishingLinks": ["evil.com"], "isPhishing": True, ...}, 
+         "❌ Danger: EVIDENCE DETECTED: ...")
     """
     message_lower = message_text.lower()
     risk_score = intel.get("riskScore", 0)
@@ -546,12 +589,55 @@ async def handle_message(
         # Deep Flat Sanitizer: Recursively flattens nested lists and extracts dict values
         def ensure_list(val):
             """
-            Recursively flatten nested lists and extract dict values.
+            Deep Flat Sanitizer - Recursive schema guardian for AI-generated data.
             
-            Examples:
-                [['url1', 'url2']] → ['url1', 'url2']
-                [{'link': 'url1'}] → ['url1']
-                'string' → []
+            LLMs return probabilistic output that often violates Pydantic schema requirements,
+            causing 400 Bad Request errors. This function recursively traverses nested
+            structures (lists of lists, dict-wrapped values, MongoDB $addToSet artifacts)
+            and extracts only string values into a flat list.
+            
+            TRANSFORMATION MATRIX:
+            ----------------------
+            Input Type              | Output
+            ------------------------|---------------------------
+            [['url1', 'url2']]      | ['url1', 'url2']
+            [{'link': 'url1'}]      | ['url1']
+            {'0': 'link1', '1': ...}| ['link1', ...]
+            'string'                | [] (strings not in list)
+            None                    | []
+            123 (int)               | [] (non-strings ignored)
+            
+            ALGORITHM:
+            ----------
+            1. Initialize empty result list
+            2. Define recursive flatten() helper:
+               - If list: recurse on each element
+               - If dict: recurse on each value (ignore keys)
+               - If string: append to result
+               - Else: ignore (numbers, booleans, None)
+            3. Execute flatten(val) and return result
+            
+            USE CASES:
+            ----------
+            - MongoDB $addToSet operations requiring array input for $each
+            - Pydantic model validation requiring List[str] types
+            - React Native/Expo frontend compatibility (flat JSON arrays)
+            - AI output sanitization before database persistence
+            
+            Args:
+                val: Any value from AI extraction or database query.
+                     Commonly: list, dict, nested list, None, or unexpected types.
+            
+            Returns:
+                List[str]: Flat list containing only string values extracted from
+                          nested structures. Guaranteed never nested, never containing
+                          dicts, and always iterable by React Native FlatList.
+            
+            Example:
+                >>> ensure_list([['netflix.com', 'evil.com']])
+                ['netflix.com', 'evil.com']
+                >>> ensure_list({'link': 'phishing.com', 'upi': 'user@upi'})
+                ['phishing.com', 'user@upi']
             """
             if val is None:
                 return []

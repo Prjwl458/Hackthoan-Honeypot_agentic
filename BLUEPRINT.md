@@ -99,7 +99,155 @@ Result: Risk Score = 40 → Unverified/Suspicious (not confirmed scam)
 
 ---
 
-## 2. Data Storage: MongoDB Intelligence Structure
+## 2. The Decision Matrix: Hardcoded Safety Standards
+
+The `finalize_intelligence()` function enforces **three immutable validation rules** as the FINAL GATE before any response reaches the client. These rules override ALL AI hallucinations.
+
+### The Three Rules
+
+#### Rule 1: The Evidence Mandate
+**Trigger:** `phishingLinks`, `upiIds`, OR `bankAccounts` is non-empty
+
+| Field | Enforced Value | Reason |
+|-------|---------------|--------|
+| `isPhishing` | `true` | Physical evidence exists |
+| `riskScore` | `max(current, 75)` | Forces > 60 |
+| `urgencyLevel` | `"High"` | Evidence requires immediate attention |
+| `scamType` | `"Confirmed Phishing/Scam"` | Classification locked |
+| `agentNotes` | `"EVIDENCE DETECTED: [artifacts]"` | Mandated evidence disclosure |
+| `reply` | `"❌ Danger: ..."` | UI headline prefix |
+
+**Logic:**
+```python
+if phishing_links or upi_ids or bank_accounts:
+    intel["isPhishing"] = True
+    intel["riskScore"] = max(risk_score, 75)  # MUST be > 60
+    intel["agentNotes"] = f"EVIDENCE DETECTED: {artifacts}"
+    reply = f"❌ Danger: {intel['agentNotes'][:80]}..."
+    return intel, reply  # EARLY EXIT
+```
+
+---
+
+#### Rule 2: The Transactional Safeguard (False Positive Prevention)
+**Trigger:** Message contains `"OTP"` AND does NOT contain `"forward"`/`"share"`
+
+| Field | Enforced Value | Reason |
+|-------|---------------|--------|
+| `isPhishing` | `false` | Legitimate transactional message |
+| `riskScore` | `5` | Must be < 10 |
+| `scamType` | `"Safe/Transactional"` | Classification locked |
+| `urgencyLevel` | `"Low"` | No immediate threat |
+| `phishingLinks` | `[]` | Artifacts cleared |
+| `upiIds` | `[]` | Artifacts cleared |
+| `bankAccounts` | `[]` | Artifacts cleared |
+| `reply` | `"✅ Safe: Legitimate transactional message"` | UI headline prefix |
+
+**Logic:**
+```python
+has_otp = "otp" in message_lower
+has_dangerous = any(kw in message_lower for kw in ["forward", "share"])
+
+if has_otp and not has_dangerous:
+    intel["isPhishing"] = False
+    intel["riskScore"] = 5
+    intel["scamType"] = "Safe/Transactional"
+    # All artifacts cleared
+    reply = "✅ Safe: Legitimate transactional message (OTP/Verification)"
+    return intel, reply  # EARLY EXIT (overrides Evidence Mandate)
+```
+
+**Critical Exception - Social Engineering:**
+If the message contains BOTH "OTP" AND forwarding instructions ("forward", "share with", "send to"), this rule is bypassed and the message escalates to maximum risk (Rule 1 applies if evidence exists).
+
+---
+
+#### Rule 3: The Headline Sync (UI Readiness)
+**Trigger:** No special cases from Rule 1 or Rule 2
+
+Maps risk scores to standardized UI headlines:
+
+| Risk Range | Prefix | Category | Example Reply |
+|------------|--------|----------|---------------|
+| 0-10 | `✅ Safe:` | Safe/Transactional | `"✅ Safe: Bank balance notification"` |
+| 11-50 | `⚠️ Warning:` | Suspicious/Unverified | `"⚠️ Warning: Unusual request pattern detected"` |
+| 51-100 | `❌ Danger:` | Confirmed Phishing/Scam | `"❌ Danger: Phishing link detected"` |
+
+**Logic:**
+```python
+risk_score = intel.get("riskScore", 0)
+
+if 0 <= risk_score <= 10:
+    prefix, category = "✅ Safe:", "Safe/Transactional"
+elif 11 <= risk_score <= 50:
+    prefix, category = "⚠️ Warning:", "Suspicious/Unverified"
+else:
+    prefix, category = "❌ Danger:", "Confirmed Phishing/Scam"
+
+intel["scamType"] = category
+reply = f"{prefix} {intel['agentNotes'][:60]}"
+```
+
+---
+
+### The Priority Queue
+
+Rules are evaluated in **strict priority order** to ensure logical consistency:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  STEP 1: Transactional Safeguard (Rule 2)               │
+│  ├── IF: OTP detected AND no forwarding keywords        │
+│  └── THEN: Force Safe classification → EXIT             │
+├─────────────────────────────────────────────────────────┤
+│  STEP 2: Evidence Mandate (Rule 1)                      │
+│  ├── IF: Physical artifacts exist                       │
+│  └── THEN: Force High Risk → EXIT                       │
+├─────────────────────────────────────────────────────────┤
+│  STEP 3: Headline Sync (Rule 3)                         │
+│  └── Apply standard prefix based on final risk score    │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Key Insight:** Rule 2 (Transactional) can override Rule 1 (Evidence) because legitimate OTPs should NEVER be flagged as scams, even if the AI hallucinates artifacts. Conversely, Rule 1 overrides any AI-scored risk below 60 when physical evidence exists.
+
+---
+
+### UI State Mapping for Frontend Developers
+
+The `reply` field is designed for direct UI rendering. Parse the prefix to determine visual state:
+
+```javascript
+// React Native / Expo example
+const getUIState = (reply) => {
+  if (reply.startsWith('✅ Safe:')) {
+    return {
+      icon: 'checkmark-circle',
+      color: '#22c55e',  // green-500
+      bgColor: '#dcfce7', // green-100
+      severity: 'safe'
+    };
+  } else if (reply.startsWith('⚠️ Warning:')) {
+    return {
+      icon: 'alert-triangle',
+      color: '#f59e0b',  // amber-500
+      bgColor: '#fef3c7', // amber-100
+      severity: 'warning'
+    };
+  } else if (reply.startsWith('❌ Danger:')) {
+    return {
+      icon: 'close-circle',
+      color: '#ef4444',  // red-500
+      bgColor: '#fee2e2', // red-100
+      severity: 'danger'
+    };
+  }
+};
+```
+
+---
+
+## 4. Data Storage: MongoDB Intelligence Structure
 
 ### Collection: `scam_logs`
 

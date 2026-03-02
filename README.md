@@ -12,6 +12,53 @@ A production-grade FastAPI application that intercepts scam messages, analyzes t
 - **Rate Limiting** - 10 requests/minute per session
 - **Production Ready** - Global error handling, health checks, CORS enabled
 
+## 🔒 Security Features
+
+### Social Engineering Detection
+The system detects sophisticated **OTP forwarding scams** - attacks that use legitimate-looking OTPs as bait but include dangerous forwarding instructions:
+
+```python
+# Example: Social Engineering Detection
+Message: "Your OTP is 1234. Forward this to our agent to verify."
+Result: Risk 100 (Critical) - Social Engineering detected
+
+Message: "Your OTP is 5678. Do not share with anyone."
+Result: Risk 5 (Safe) - Transactional message
+```
+
+**Keywords monitored:** `forward`, `share with`, `send to`, `share this`, `send this`
+
+### Evidence-Based Risk Capping
+To prevent **"Honeypot Bias"** (where urgency language alone triggers false high-risk classifications), the system implements a **hard risk cap**:
+
+| Evidence Present | Max Risk | Classification |
+|------------------|----------|----------------|
+| None | 40 | Unverified/Suspicious |
+| Links only | 60 | Potential Phishing |
+| UPI/Bank + Links | 80 | High Risk Scam |
+| All artifacts + PII request | 100 | Critical Threat |
+
+**Logic:** A message cannot exceed Risk 40 without at least one physical artifact (phishingLinks, upiIds, bankAccounts).
+
+### Recursive Data Flattening (React Native/Expo Compatible)
+The `ensure_list()` helper function ensures **100% compatibility** with React Native/Expo frontends by recursively sanitizing AI output:
+
+```python
+# Problem: AI returns nested structures that cause Pydantic validation errors
+Input: [['url1', 'url2']] or [{'link': 'url1'}] or {'0': 'link1'}
+
+# Solution: Deep Flat Sanitizer
+Output: ['url1', 'url2']  # Always a flat list of strings
+```
+
+**Applied to all array fields:**
+- `phishingLinks` - URLs extracted from nested AI responses
+- `upiIds` - Payment addresses from dict-wrapped outputs
+- `bankAccounts` - Account numbers from object formats
+- `extractedEntities` - Combined entities (most commonly nested)
+
+This ensures the API never returns `400 Bad Request` errors due to schema mismatches, maintaining seamless mobile app integration.
+
 ## 🏗️ System Architecture (The Safety Sandwich)
 
 ```
