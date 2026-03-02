@@ -19,15 +19,38 @@ Our architecture follows a **three-layer validation pipeline** that prioritizes 
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-#### Layer 1: Pre-Process (Whitelist)
-**Purpose**: Fast-path legitimate messages to avoid LLM costs and latency
+#### Layer 1: Pre-Process (Instruction-Based Whitelisting)
+**Purpose**: Fast-path legitimate messages while detecting instruction-based scams
+
+The whitelist uses **context-aware pattern matching** that examines both content AND intent:
+
+##### Standard Safe Patterns
 
 | Pattern | Detection | Result |
 |---------|-----------|--------|
 | OTP | `[0-9]{4,6}` + "verification/code" keywords | Risk: 5, Type: Safe/Transactional |
 | Bank Update | "A/C XX" + "debited/credited" + balance | Risk: 10, Type: Bank Update |
 
-If matched, the request returns immediately with a standardized safe classification.
+##### Social Engineering Detection (The OTP Rule)
+
+**The Critical Exception**: If an OTP message contains **forwarding instructions**, it's immediately escalated to maximum risk:
+
+```
+IF message.contains("OTP") 
+   AND (message.contains("forward") OR message.contains("share with") OR message.contains("send to")):
+       riskScore = 100
+       scamType = "Social Engineering"
+```
+
+**Examples:**
+
+| Message | Risk | Reason |
+|---------|------|--------|
+| "Your OTP is 1234. Do not share." | 5 | Standard safe OTP |
+| "Your OTP is 1234. Forward this to our agent to verify." | 100 | **Forwarding instruction detected** |
+| "Your OTP is 5678. Share with customer care." | 100 | **Sharing instruction detected** |
+
+This **Instruction-Based Whitelisting** prevents sophisticated social engineering attacks that use legitimate-looking OTPs as the bait, but dangerous forwarding instructions as the hook.
 
 #### Layer 2: Process (AI Analysis)
 **Purpose**: Deep analysis for non-whitelist messages
@@ -217,28 +240,55 @@ def check_rate_limit(session_id: str, max_requests: int = 10, window_seconds: in
 
 ### The `ensure_list` Sanitization Helper
 
-LLMs are probabilistic and may return data in unexpected formats. The `ensure_list` function acts as a **schema guardian**, preventing 400 Bad Request errors by forcing AI-generated dictionaries into Pydantic-compliant lists.
+LLMs are probabilistic and may return data in unexpected formats. The `ensure_list` function acts as a **Deep Flat Sanitizer** - a recursive schema guardian that prevents 400 Bad Request errors by forcing AI-generated dictionaries and nested lists into Pydantic-compliant flat lists.
 
 ```python
 def ensure_list(val):
-    if isinstance(val, dict):
-        return list(val.values())  # Extract values from dict
-    return val if isinstance(val, list) else []
+    """
+    Recursively flatten nested lists and extract dict values.
+    
+    Examples:
+        [['url1', 'url2']] → ['url1', 'url2']
+        [{'link': 'url1'}] → ['url1']
+        {"sender": "PowerCorp"} → ['PowerCorp']
+    """
+    if val is None:
+        return []
+    
+    result = []
+    
+    def flatten(item):
+        if isinstance(item, list):
+            for subitem in item:
+                flatten(subitem)
+        elif isinstance(item, dict):
+            for subval in item.values():
+                flatten(subval)
+        elif isinstance(item, str):
+            result.append(item)
+        # Ignore numbers, booleans, etc.
+    
+    flatten(val)
+    return result
 ```
 
-**Applied to all array fields:**
-- `bankAccounts` - Account numbers (may come as {"account": "123456"})
-- `upiIds` - Payment addresses (may come as {"upi": "user@upi"})
-- `phishingLinks` - Malicious URLs
+**Applied to all array fields (with Deep Flattening):**
+- `bankAccounts` - Account numbers (may come as [["123456"]] or {"account": "123456"})
+- `upiIds` - Payment addresses (may come as [{"upi": "user@upi"}])
+- `phishingLinks` - Malicious URLs (may come as nested [["url1", "url2"]])
 - `phoneNumbers` - Contact numbers (may come as {"sender": "PowerCorp"})
 - `suspiciousKeywords` - Risk indicators
-- `extractedEntities` - Combined entities
+- `extractedEntities` - Combined entities (most likely to be nested)
 
-**Why this matters:**
-The AI might return `phoneNumbers: {"sender": "PowerCorp"}` instead of `phoneNumbers: ["PowerCorp"]`. Without sanitization, Pydantic validation fails with:
-```
-ValidationError: Input should be a valid list
-```
+**Why Deep Flattening matters:**
+
+| Input from AI | Without Sanitizer | With Deep Flat Sanitizer |
+|--------------|------------------|-------------------------|
+| `[['url1', 'url2']]` | Validation Error | `['url1', 'url2']` |
+| `[{'link': 'url1'}]` | Validation Error | `['url1']` |
+| `{"sender": "PowerCorp"}` | Validation Error | `['PowerCorp']` |
+
+The **Deep Flat Sanitizer** recursively traverses nested structures, ensuring `extractedEntities` is always a flat list of strings - no nested lists, no dictionaries, just clean Pydantic-compatible arrays.
 
 ### MongoDB Update Strategy: The $each Array Contract
 

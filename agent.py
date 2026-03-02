@@ -37,6 +37,23 @@ def pre_process_message(message: str) -> Optional[Dict[str, Any]]:
     otp_pattern = r'\b\d{4,6}\b'
     otp_keywords = ['otp', 'verification', 'code', 'entered', 'submitted']
     if re.search(otp_pattern, message) and any(kw in message_lower for kw in otp_keywords):
+        # Social Engineering Detection: Check for dangerous forwarding instructions
+        dangerous_keywords = ['forward', 'share with', 'send to', 'share this', 'send this']
+        if any(dangerous in message_lower for dangerous in dangerous_keywords):
+            logger.info("SOCIAL ENGINEERING DETECTED: OTP with forwarding instructions")
+            return {
+                "riskScore": 100,
+                "scamType": "Social Engineering",
+                "urgencyLevel": "High",
+                "agentNotes": "CRITICAL: OTP scam requesting forwarding - Never share OTPs with anyone",
+                "extractedEntities": [],
+                "bankAccounts": [],
+                "upiIds": [],
+                "phishingLinks": [],
+                "phoneNumbers": [],
+                "suspiciousKeywords": ["forward", "otp", "share"]
+            }
+        
         logger.info("WHITELIST MATCH: OTP pattern detected")
         return {
             "riskScore": 5,

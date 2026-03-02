@@ -428,11 +428,34 @@ async def handle_message(
         )
         
         # Step 3: Prepare callback payload
-        # Ensure all list fields are actually lists (not dicts)
+        # Deep Flat Sanitizer: Recursively flattens nested lists and extracts dict values
         def ensure_list(val):
-            if isinstance(val, dict):
-                return list(val.values())
-            return val if isinstance(val, list) else []
+            """
+            Recursively flatten nested lists and extract dict values.
+            
+            Examples:
+                [['url1', 'url2']] → ['url1', 'url2']
+                [{'link': 'url1'}] → ['url1']
+                'string' → []
+            """
+            if val is None:
+                return []
+            
+            result = []
+            
+            def flatten(item):
+                if isinstance(item, list):
+                    for subitem in item:
+                        flatten(subitem)
+                elif isinstance(item, dict):
+                    for subval in item.values():
+                        flatten(subval)
+                elif isinstance(item, str):
+                    result.append(item)
+                # Ignore numbers, booleans, etc.
+            
+            flatten(val)
+            return result
         
         # Build clean intel dict for logging and response
         intel_dict = {
