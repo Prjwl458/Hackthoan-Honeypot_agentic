@@ -99,7 +99,200 @@ Result: Risk Score = 40 → Unverified/Suspicious (not confirmed scam)
 
 ---
 
-## 2. The Final Three: Deterministic Override Rules
+## 2. v1.2 Titanium: The 5 Architectural Pillars
+
+The v1.2 Titanium release introduces 5 production-grade architectural pillars that harden the system for enterprise deployment.
+
+---
+
+### Pillar 1: The Armor (Security)
+
+#### Rate Limiting with slowapi
+**Purpose:** Prevent API credit exhaustion and protect against abuse
+
+**Configuration:**
+```python
+from slowapi import Limiter
+
+limiter = Limiter(key_func=get_remote_address)
+
+@app.post("/message")
+@limiter.limit("10/minute")
+async def handle_message(...):
+    # Rate limited to 10 requests per minute per IP
+```
+
+**Behavior:**
+- Returns `429 Too Many Requests` when limit exceeded
+- Tracks by client IP address
+- Independent of session-based rate limiting (dual protection)
+
+#### Restricted CORS
+**Purpose:** Prevent unauthorized cross-origin requests
+
+**Allowed Origins:**
+```python
+ALLOWED_ORIGINS = [
+    "http://localhost:19000",  # Expo development
+    "http://localhost:19006",  # Expo web
+    "http://localhost:3000",   # React development
+    "https://your-production-domain.com",  # Production (via env)
+]
+```
+
+**Configuration:**
+- Methods: `GET`, `POST`, `OPTIONS`
+- Headers: `Authorization`, `X-API-Key`, `Content-Type`, `X-Request-ID`
+- Exposed: `X-RateLimit-Limit`, `X-RateLimit-Remaining`
+
+---
+
+### Pillar 2: The Heart (Reliability)
+
+#### Request Timeout Protection
+**Purpose:** Prevent hung connections from consuming resources
+
+**Implementation:**
+```python
+try:
+    intel, reply = await asyncio.wait_for(
+        asyncio.gather(
+            agent.extract_intelligence(...),
+            agent.generate_response(...)
+        ),
+        timeout=15.0  # 15 seconds max
+    )
+except asyncio.TimeoutError:
+    raise HTTPException(
+        status_code=504,
+        detail={
+            "status": "error",
+            "error": "Gateway Timeout",
+            "message": "AI analysis timed out after 15 seconds"
+        }
+    )
+```
+
+**Response:** Returns clean `504 Gateway Timeout` instead of partial fallback data
+
+#### Health Check Endpoint
+**Purpose:** Service status monitoring for load balancers
+
+```bash
+GET /health
+
+Response:
+{
+    "status": "online",
+    "version": "1.2.0",
+    "timestamp": "2024-01-15T10:30:00.000000"
+}
+```
+
+---
+
+### Pillar 3: The Dashboard (Telemetry)
+
+#### Latency Tracking
+**Purpose:** Monitor API performance and identify bottlenecks
+
+**Implementation:**
+```python
+start_time = time()
+# ... processing ...
+latency_ms = int((time() - start_time) * 1000)
+```
+
+**Response Fields:**
+```json
+{
+    "status": "success",
+    "reply": "...",
+    "intelligence": {...},
+    "version": "1.2.0",
+    "timestamp": "2024-01-15T10:30:00.000000",
+    "latency_ms": 245
+}
+```
+
+#### Version & Timestamp
+Every response includes:
+- `version`: API version (e.g., "1.2.0")
+- `timestamp`: ISO-formatted UTC timestamp
+- `latency_ms`: Request processing time in milliseconds
+
+---
+
+### Pillar 4: The Final Gatekeeper (Deterministic Logic)
+
+#### Rule 1: Evidence Mandate (Updated for v1.2)
+**Trigger:** `phishingLinks` OR `upiIds` are NOT empty
+
+| Field | Enforced Value |
+|-------|---------------|
+| `isPhishing` | `True` |
+| `riskScore` | `max(current, 70)` |
+| `agentNotes` | `"Evidence Found: [artifacts]"` |
+
+**Change from v1.0:** Threshold lowered from 75 to 70; `bankAccounts` removed from trigger
+
+#### Rule 2: OTP Transactional Safeguard
+**Trigger:** `"OTP" in text` AND `no links/UPIs` AND `no "forward"/"share"`
+
+| Field | Enforced Value |
+|-------|---------------|
+| `isPhishing` | `False` |
+| `riskScore` | `5` |
+| `scamType` | `"Safe/Transactional"` |
+
+#### Rule 3: Master Boolean Sync
+**Logic:** Strict threshold at 30
+
+```python
+if risk_score < 30:
+    intel["isPhishing"] = False
+else:
+    intel["isPhishing"] = True
+```
+
+---
+
+### Pillar 5: The Filter (Input Normalization)
+
+#### normalize_input() Function
+**Purpose:** Sanitize user input before AI processing
+
+**Operations:**
+1. **Strip whitespace:** Remove leading/trailing spaces
+2. **Remove invisible Unicode:**
+   - Zero-width space (`\u200b`)
+   - Zero-width non-joiner (`\u200c`)
+   - Zero-width joiner (`\u200d`)
+   - Byte order mark (`\ufeff`)
+   - ASCII control characters (`\x00-\x1f` except `\t`, `\n`, `\r`)
+3. **Normalize spaces:** Collapse multiple spaces to single space
+
+**Implementation:**
+```python
+def normalize_input(text: str) -> str:
+    text = text.strip()
+    invisible_chars = r'[\u200b\u200c\u200d\ufeff\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'
+    text = re.sub(invisible_chars, '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+```
+
+**Example:**
+```
+Input:  "  Hello\u200bWorld  \x00\x01  "
+Output: "Hello World"
+```
+
+---
+
+## 3. The Final Three: Deterministic Override Rules
+
+The `finalize_intelligence()` function implements **three immutable validation rules** as the FINAL GATE. These rules enforce **100% logical harmony** by correcting AI hallucinations.
 
 The `finalize_intelligence()` function implements **three immutable validation rules** as the FINAL GATE. These rules enforce **100% logical harmony** by correcting AI hallucinations and guaranteeing consistent output.
 

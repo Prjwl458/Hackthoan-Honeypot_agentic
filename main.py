@@ -3,12 +3,13 @@ load_dotenv()
 
 """
 FastAPI application entry point for Agentic AI Honeypot.
-Production-ready with async HTTP, database integration, and global error handling.
+v1.2.0 Titanium - Production-ready with async HTTP, database integration, and global error handling.
 """
 
 import os
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -16,17 +17,28 @@ from collections import defaultdict
 from time import time
 
 import httpx
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
+# v1.2 Titanium: Rate Limiting with slowapi
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+# v1.2 Titanium: API Version
+API_VERSION = "1.2.0"
+
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
 from database import db_manager
 from agent import ScamAgent, pre_process_message, apply_evidence_guard
 
-# Rate Limiter: 10 requests per minute per session
+# v1.2 Titanium: Rate Limiting with slowapi (10 requests per minute per IP)
+limiter = Limiter(key_func=get_remote_address)
+
+# Legacy rate limiter for session-based tracking (kept for compatibility)
 rate_limit_store = defaultdict(list)
 
 def check_rate_limit(session_id: str, max_requests: int = 10, window_seconds: int = 60) -> bool:
@@ -40,12 +52,6 @@ def check_rate_limit(session_id: str, max_requests: int = 10, window_seconds: in
     
     Returns:
         True if request is allowed, False if rate limit exceeded.
-    
-    Algorithm:
-        1. Get current timestamp
-        2. Remove all old timestamps outside the window
-        3. If remaining requests >= max_requests, return False
-        4. Otherwise, add current timestamp and return True
     """
     now = time()
     # Clean old entries
@@ -56,6 +62,49 @@ def check_rate_limit(session_id: str, max_requests: int = 10, window_seconds: in
     
     rate_limit_store[session_id].append(now)
     return True
+
+
+# v1.2 Titanium: Input Normalization (The Filter)
+def normalize_input(text: str) -> str:
+    """
+    Normalize input text by stripping whitespace and removing invisible Unicode characters.
+    
+    This function acts as a pre-processing filter to sanitize user input before AI analysis.
+    Removes control characters, zero-width spaces, and other invisible Unicode characters
+    that could cause issues with regex pattern matching or AI processing.
+    
+    Args:
+        text: Raw input text from user
+        
+    Returns:
+        str: Normalized text with whitespace stripped and invisible characters removed
+        
+    Examples:
+        >>> normalize_input("  Hello\\u200bWorld  ")
+        "HelloWorld"
+        >>> normalize_input("\\x00\\x01\\x02Hello")
+        "Hello"
+    """
+    if not text:
+        return ""
+    
+    # Strip leading/trailing whitespace
+    text = text.strip()
+    
+    # Remove invisible Unicode characters:
+    # - \u200b: Zero-width space
+    # - \u200c: Zero-width non-joiner
+    # - \u200d: Zero-width joiner
+    # - \ufeff: Byte order mark (BOM)
+    # - \x00-\x1f: ASCII control characters (except \t, \n, \r)
+    # - \x7f: DEL character
+    invisible_chars = r'[\u200b\u200c\u200d\ufeff\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'
+    text = re.sub(invisible_chars, '', text)
+    
+    # Normalize multiple spaces to single space
+    text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
 
 # Configure logging
 logging.basicConfig(
@@ -97,21 +146,41 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Agentic AI Honeypot API",
     description="Real-time scam engagement and intelligence extraction system",
-    version="2.0.0",
+    version=API_VERSION,
     lifespan=lifespan
 )
 
-# CORS Configuration
+# v1.2 Titanium: Attach rate limiter to app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# v1.2 Titanium: CORS Configuration - Restricted Origins
 # =============================================================================
-# Allow all origins for development/testing.
-# In production, restrict to your actual domains.
+# Development: localhost:19000 (Expo), localhost:3000 (React)
+# Production: Set PRODUCTION_DOMAIN in environment variables
 # =============================================================================
+ALLOWED_ORIGINS = [
+    "http://localhost:19000",  # Expo development
+    "http://localhost:19006",  # Expo web
+    "http://localhost:3000",   # React development
+    "http://127.0.0.1:19000",
+    "http://127.0.0.1:3000",
+]
+
+# Add production domain if configured
+production_domain = os.getenv("PRODUCTION_DOMAIN")
+if production_domain:
+    ALLOWED_ORIGINS.append(production_domain)
+    if not production_domain.startswith("https://"):
+        ALLOWED_ORIGINS.append(f"https://{production_domain}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "X-API-Key", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining"],
 )
 
 # Global Exception Handler - returns clean 503 JSON on failures
@@ -335,10 +404,11 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
         return intel, reply
     
     # =========================================================================
-    # RULE 1: Evidence = High Risk
-    # Trigger: phishingLinks, upiIds, OR bankAccounts are NOT empty
+    # v1.2 Titanium RULE 1: Evidence Mandate
+    # Trigger: phishingLinks OR upiIds are NOT empty (bank_accounts excluded)
+    # If triggered: isPhishing=True, riskScore >= 70
     # =========================================================================
-    has_evidence = len(phishing_links) > 0 or len(upi_ids) > 0 or len(bank_accounts) > 0
+    has_evidence = len(phishing_links) > 0 or len(upi_ids) > 0
     
     if has_evidence:
         # Build artifact list for agentNotes
@@ -352,8 +422,8 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
         
         artifact_str = ", ".join(artifacts) if artifacts else "Unknown"
         
-        # FORCE high-risk values
-        intel["riskScore"] = max(risk_score, 75)
+        # v1.2: FORCE high-risk values (riskScore >= 70)
+        intel["riskScore"] = max(risk_score, 70)
         intel["isPhishing"] = True
         intel["scamType"] = "Confirmed Phishing/Scam"
         intel["urgencyLevel"] = "High"
@@ -431,41 +501,61 @@ async def send_guvi_callback_async(session_id: str, payload: dict):
 
 @app.get("/health")
 async def health_check():
-    """Simple health check for wake server button."""
-    return {"status": "online"}
+    """v1.2 Titanium: Health check endpoint with version."""
+    return {
+        "status": "online",
+        "version": API_VERSION,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 @app.get("/")
 async def root():
-    """Health check endpoint."""
+    """Root endpoint with service info."""
     db_status = "connected" if db_manager._connection_verified and not db_manager._use_in_memory else "fallback"
     return {
         "status": "success",
         "service": "Agentic AI Honeypot",
-        "version": "2.0.0",
-        "database": db_status
+        "version": API_VERSION,
+        "database": db_status,
+        "timestamp": datetime.utcnow().isoformat()
     }
 
 
 @app.post("/message", response_model=HoneypotResponse)
+@limiter.limit("10/minute")
 async def handle_message(
     request: HoneypotRequest,
     background_tasks: BackgroundTasks,
-    api_key: str = Depends(verify_api_key)
+    api_key: str = Depends(verify_api_key),
+    raw_request: Request = None
 ):
     """
-    Primary endpoint for honeypot scam engagement.
+    v1.2 Titanium: Primary endpoint for honeypot scam engagement.
     
+    Features:
+    - Rate limiting: 10 requests per minute per IP
+    - Input normalization: Strips whitespace and invisible Unicode
+    - Latency tracking: Returns latency_ms in response
+    - Timeout protection: 15s AI timeout with 504 response
+    - Version telemetry: Returns API version and timestamp
+    
+    Process:
     1. Validates API key
-    2. Detects scam intent
-    3. Extracts intelligence
-    4. Generates tarpitting response
-    5. Saves to database
-    6. Sends callback (non-blocking)
+    2. Normalizes input (The Filter)
+    3. Tracks latency (The Dashboard)
+    4. Detects scam intent
+    5. Extracts intelligence
+    6. Generates response
+    7. Saves to database
+    8. Sends callback (non-blocking)
     """
+    # v1.2 Titanium: Latency tracking start
+    start_time = time()
+    
     # API Key is already validated by Depends(verify_api_key)
     logger.info(f"API Key validated for request")
     
-    # Rate limiting check
+    # v1.2 Titanium: Legacy rate limiting check (session-based)
     session_id = request.get_session_id()
     if not check_rate_limit(session_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Max 10 requests per minute.")
@@ -478,9 +568,14 @@ async def handle_message(
     # Extract message text from request.message
     message_data = request.message
     if isinstance(message_data, dict):
-        message_text = message_data.get("text", "") or message_data.get("content", "")
+        raw_text = message_data.get("text", "") or message_data.get("content", "")
     else:
-        message_text = message_data.get_text()
+        raw_text = message_data.get_text()
+    
+    # v1.2 Titanium: Input Normalization (The Filter)
+    # Strip whitespace and remove invisible Unicode characters
+    message_text = normalize_input(raw_text)
+    logger.info(f"Normalized message: '{message_text[:50]}...' (original length: {len(raw_text)}, normalized length: {len(message_text)})")
     
     # =====================================================================
     # THE ENTRY GATE: WHITELIST PRE-PROCESSING (MUST be first!)
@@ -534,31 +629,30 @@ async def handle_message(
     )
     
     try:
-        # Step 1: Extract intelligence and generate verdict (ALWAYS - for all requests)
+        # v1.2 Titanium: Step 1 - Extract intelligence with 15s timeout
         try:
             intel, reply = await asyncio.wait_for(
                 asyncio.gather(
                     agent.extract_intelligence(message_text, history, sender_id),
                     agent.generate_response(message_text, history, metadata)
                 ),
-                timeout=8.0
+                timeout=15.0  # v1.2: Increased from 8.0 to 15.0 seconds
             )
         except asyncio.TimeoutError:
-            logger.warning("AI processing timed out, using fallback")
-            reply = "Neutral - Analysis inconclusive due to timeout"
-            intel = {
-                "bankAccounts": [],
-                "upiIds": [],
-                "phishingLinks": [],
-                "phoneNumbers": [],
-                "suspiciousKeywords": [],
-                "agentNotes": "Processing timed out",
-                "scamType": "Unknown",
-                "urgencyLevel": "Low",
-                "riskScore": 0,
-                "extractedEntities": [],
-                "threatSource": sender_id or ""
-            }
+            # v1.2 Titanium: Return 504 Gateway Timeout instead of fallback
+            logger.error("AI processing timed out after 15 seconds")
+            latency_ms = int((time() - start_time) * 1000)
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "status": "error",
+                    "error": "Gateway Timeout",
+                    "message": "AI analysis timed out after 15 seconds",
+                    "latency_ms": latency_ms,
+                    "version": API_VERSION,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
         
         # Step 2: Apply Evidence Guard - cap risk if high but no physical evidence
         logger.info(f"Before Evidence Guard: riskScore={intel.get('riskScore')}, links={intel.get('phishingLinks')}, upi={intel.get('upiIds')}, bank={intel.get('bankAccounts')}")
@@ -679,18 +773,42 @@ async def handle_message(
             }
             background_tasks.add_task(send_guvi_callback_async, request.get_session_id(), callback_payload)
         
-        # Step 4: Return response with full intelligence (ALWAYS)
-        logger.info(f"RETURNING RESPONSE: reply={reply}, intel={intel_dict}")
-        return HoneypotResponse(
-            status="success",
-            reply=reply,  # This is now the Summary Verdict
-            intelligence=intel_dict
-        )
+        # v1.2 Titanium: Calculate latency
+        latency_ms = int((time() - start_time) * 1000)
+        
+        # v1.2 Titanium: Step 4 - Return response with telemetry
+        logger.info(f"RETURNING RESPONSE: reply={reply}, intel={intel_dict}, latency={latency_ms}ms")
+        
+        # Build response with v1.2 Titanium telemetry
+        response_data = {
+            "status": "success",
+            "reply": reply,
+            "intelligence": intel_dict,
+            "version": API_VERSION,
+            "timestamp": datetime.utcnow().isoformat(),
+            "latency_ms": latency_ms
+        }
+        
+        return HoneypotResponse(**response_data)
     
-    except Exception as e:
-        # Let errors propagate so we can see actual traceback in logs
-        logger.exception(f"Error processing request: {e}")
+    except HTTPException:
+        # Re-raise HTTP exceptions (including our 504 timeout)
         raise
+    except Exception as e:
+        # v1.2 Titanium: Return structured error response
+        logger.exception(f"Error processing request: {e}")
+        latency_ms = int((time() - start_time) * 1000)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status": "error",
+                "error": "Internal server error",
+                "message": str(e) if os.getenv("DEBUG", "false").lower() == "true" else "An unexpected error occurred",
+                "latency_ms": latency_ms,
+                "version": API_VERSION,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
 
 
 # =============================================================================
