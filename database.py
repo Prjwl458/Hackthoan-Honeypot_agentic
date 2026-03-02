@@ -253,7 +253,12 @@ class DatabaseManager:
             intel_update = {}
             for key in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers"]:
                 if key in intelligence and intelligence[key]:
-                    intel_update[f"intelligence.{key}"] = {"$each": intelligence[key]}
+                    # Ensure it's a list, not a dict
+                    val = intelligence[key]
+                    if isinstance(val, dict):
+                        val = list(val.values())
+                    if isinstance(val, list):
+                        intel_update[f"intelligence.{key}"] = {"$each": val}
             
             if intel_update:
                 update_ops["$addToSet"] = intel_update
@@ -265,9 +270,13 @@ class DatabaseManager:
             # Update suspicious keywords with $addToSet
             if intelligence.get("suspiciousKeywords"):
                 update_ops["$addToSet"] = update_ops.get("$addToSet", {})
-                update_ops["$addToSet"]["intelligence.suspiciousKeywords"] = {
-                    "$each": intelligence["suspiciousKeywords"]
-                }
+                kw = intelligence["suspiciousKeywords"]
+                if isinstance(kw, dict):
+                    kw = list(kw.values())
+                if isinstance(kw, list):
+                    update_ops["$addToSet"]["intelligence.suspiciousKeywords"] = {
+                        "$each": kw
+                    }
             
             # Update new enhanced fields (overwrite)
             if intelligence.get("scamType"):
@@ -278,9 +287,13 @@ class DatabaseManager:
                 update_ops["$set"]["intelligence.riskScore"] = intelligence["riskScore"]
             if intelligence.get("extractedEntities"):
                 update_ops["$addToSet"] = update_ops.get("$addToSet", {})
-                update_ops["$addToSet"]["intelligence.extractedEntities"] = {
-                    "$each": intelligence["extractedEntities"]
-                }
+                entities = intelligence["extractedEntities"]
+                if isinstance(entities, dict):
+                    entities = list(entities.values())
+                if isinstance(entities, list):
+                    update_ops["$addToSet"]["intelligence.extractedEntities"] = {
+                        "$each": entities
+                    }
             if intelligence.get("threatSource"):
                 update_ops["$set"]["intelligence.threatSource"] = intelligence["threatSource"]
             

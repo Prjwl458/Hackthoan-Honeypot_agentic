@@ -428,17 +428,23 @@ async def handle_message(
         )
         
         # Step 3: Prepare callback payload
+        # Ensure all list fields are actually lists (not dicts)
+        def ensure_list(val):
+            if isinstance(val, dict):
+                return list(val.values())
+            return val if isinstance(val, list) else []
+        
         ext_intel = IntelligenceData(
-            bankAccounts=intel.get("bankAccounts", []),
-            upiIds=intel.get("upiIds", []),
-            phishingLinks=intel.get("phishingLinks", []),
-            phoneNumbers=intel.get("phoneNumbers", []),
-            suspiciousKeywords=intel.get("suspiciousKeywords", []),
+            bankAccounts=ensure_list(intel.get("bankAccounts", [])),
+            upiIds=ensure_list(intel.get("upiIds", [])),
+            phishingLinks=ensure_list(intel.get("phishingLinks", [])),
+            phoneNumbers=ensure_list(intel.get("phoneNumbers", [])),
+            suspiciousKeywords=ensure_list(intel.get("suspiciousKeywords", [])),
             agentNotes=intel.get("agentNotes", ""),
             scamType=intel.get("scamType", "Unknown"),
             urgencyLevel=intel.get("urgencyLevel", "Low"),
             riskScore=intel.get("riskScore", 0),
-            extractedEntities=intel.get("extractedEntities", [])
+            extractedEntities=ensure_list(intel.get("extractedEntities", []))
         )
         
         # Only send callback if scam detected
