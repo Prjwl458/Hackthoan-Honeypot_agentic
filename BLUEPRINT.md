@@ -99,151 +99,170 @@ Result: Risk Score = 40 → Unverified/Suspicious (not confirmed scam)
 
 ---
 
-## 2. The Decision Matrix: Hardcoded Safety Standards
+## 2. The Final Three: Deterministic Override Rules
 
-The `finalize_intelligence()` function enforces **three immutable validation rules** as the FINAL GATE before any response reaches the client. These rules override ALL AI hallucinations.
+The `finalize_intelligence()` function implements **three immutable validation rules** as the FINAL GATE. These rules enforce **100% logical harmony** by correcting AI hallucinations and guaranteeing consistent output.
 
-### The Three Rules
+### Critical Guarantees
 
-#### Rule 1: The Evidence Mandate
-**Trigger:** `phishingLinks`, `upiIds`, OR `bankAccounts` is non-empty
+| Guarantee | Implementation |
+|-----------|---------------|
+| **Zero Nulls** | `phishingLinks`, `upiIds`, `bankAccounts` always return `[]` never `null` |
+| **Flat Lists** | `extractedEntities` is recursively flattened to `List[str]` |
+| **Boolean Sync** | `isPhishing` strictly tied to `riskScore` threshold (30) |
 
-| Field | Enforced Value | Reason |
-|-------|---------------|--------|
-| `isPhishing` | `true` | Physical evidence exists |
-| `riskScore` | `max(current, 75)` | Forces > 60 |
-| `urgencyLevel` | `"High"` | Evidence requires immediate attention |
-| `scamType` | `"Confirmed Phishing/Scam"` | Classification locked |
-| `agentNotes` | `"EVIDENCE DETECTED: [artifacts]"` | Mandated evidence disclosure |
-| `reply` | `"❌ Danger: ..."` | UI headline prefix |
+---
 
-**Logic:**
+### Rule 1: Evidence = High Risk
+
+**Trigger:** `phishingLinks`, `upiIds`, OR `bankAccounts` is NOT empty
+
+| Field | Enforced Value |
+|-------|---------------|
+| `riskScore` | `max(current, 75)` |
+| `isPhishing` | `True` |
+| `agentNotes` | `"Evidence Found: [Detected Artifacts]"` |
+| `scamType` | `"Confirmed Phishing/Scam"` |
+| `urgencyLevel` | `"High"` |
+| `reply` | `"❌ Danger: Evidence Found: [artifacts]"` |
+
+**Implementation:**
 ```python
-if phishing_links or upi_ids or bank_accounts:
+has_evidence = len(phishing_links) > 0 or len(upi_ids) > 0 or len(bank_accounts) > 0
+
+if has_evidence:
+    artifacts = []
+    if phishing_links:
+        artifacts.extend(phishing_links[:2])
+    if upi_ids:
+        artifacts.extend(upi_ids[:2])
+    if bank_accounts:
+        artifacts.extend(bank_accounts[:1])
+    
+    artifact_str = ", ".join(artifacts)
+    intel["riskScore"] = max(risk_score, 75)
     intel["isPhishing"] = True
-    intel["riskScore"] = max(risk_score, 75)  # MUST be > 60
-    intel["agentNotes"] = f"EVIDENCE DETECTED: {artifacts}"
-    reply = f"❌ Danger: {intel['agentNotes'][:80]}..."
-    return intel, reply  # EARLY EXIT
+    intel["agentNotes"] = f"Evidence Found: {artifact_str}"
+    reply = f"❌ Danger: Evidence Found: {artifact_str}"
+    return intel, reply
 ```
 
 ---
 
-#### Rule 2: The Transactional Safeguard (False Positive Prevention)
-**Trigger:** Message contains `"OTP"` AND does NOT contain `"forward"`/`"share"`
+### Rule 2: OTP Transactional Safeguard
 
-| Field | Enforced Value | Reason |
-|-------|---------------|--------|
-| `isPhishing` | `false` | Legitimate transactional message |
-| `riskScore` | `5` | Must be < 10 |
-| `scamType` | `"Safe/Transactional"` | Classification locked |
-| `urgencyLevel` | `"Low"` | No immediate threat |
-| `phishingLinks` | `[]` | Artifacts cleared |
-| `upiIds` | `[]` | Artifacts cleared |
-| `bankAccounts` | `[]` | Artifacts cleared |
-| `reply` | `"✅ Safe: Legitimate transactional message"` | UI headline prefix |
+**Trigger:** `'OTP'` in message AND (`phishingLinks` empty AND `upiIds` empty) AND no `'forward'`/`'share'`
 
-**Logic:**
+| Field | Enforced Value |
+|-------|---------------|
+| `riskScore` | `5` |
+| `isPhishing` | `False` |
+| `scamType` | `"Safe/Transactional"` |
+| `urgencyLevel` | `"Low"` |
+| `agentNotes` | `"Safe: Transactional OTP message"` |
+| `reply` | `"✅ Safe: Transactional OTP message"` |
+
+**Implementation:**
 ```python
 has_otp = "otp" in message_lower
-has_dangerous = any(kw in message_lower for kw in ["forward", "share"])
+has_links_or_upi = len(phishing_links) > 0 or len(upi_ids) > 0
+has_forward_share = "forward" in message_lower or "share" in message_lower
 
-if has_otp and not has_dangerous:
-    intel["isPhishing"] = False
+if has_otp and not has_links_or_upi and not has_forward_share:
     intel["riskScore"] = 5
+    intel["isPhishing"] = False
     intel["scamType"] = "Safe/Transactional"
-    # All artifacts cleared
-    reply = "✅ Safe: Legitimate transactional message (OTP/Verification)"
-    return intel, reply  # EARLY EXIT (overrides Evidence Mandate)
+    intel["agentNotes"] = "Safe: Transactional OTP message"
+    reply = "✅ Safe: Transactional OTP message"
+    return intel, reply
 ```
 
-**Critical Exception - Social Engineering:**
-If the message contains BOTH "OTP" AND forwarding instructions ("forward", "share with", "send to"), this rule is bypassed and the message escalates to maximum risk (Rule 1 applies if evidence exists).
+**Key Point:** This rule specifically checks that BOTH `phishingLinks` AND `upiIds` are empty, preventing false positives on legitimate OTP messages.
 
 ---
 
-#### Rule 3: The Headline Sync (UI Readiness)
-**Trigger:** No special cases from Rule 1 or Rule 2
+### Rule 3: Master Boolean Sync
 
-Maps risk scores to standardized UI headlines:
+**Trigger:** Applied to ALL responses as final consistency check
 
-| Risk Range | Prefix | Category | Example Reply |
-|------------|--------|----------|---------------|
-| 0-10 | `✅ Safe:` | Safe/Transactional | `"✅ Safe: Bank balance notification"` |
-| 11-50 | `⚠️ Warning:` | Suspicious/Unverified | `"⚠️ Warning: Unusual request pattern detected"` |
-| 51-100 | `❌ Danger:` | Confirmed Phishing/Scam | `"❌ Danger: Phishing link detected"` |
+| Condition | `isPhishing` Value |
+|-----------|-------------------|
+| `riskScore < 30` | `False` |
+| `riskScore >= 30` | `True` |
 
-**Logic:**
+**Implementation:**
 ```python
-risk_score = intel.get("riskScore", 0)
-
-if 0 <= risk_score <= 10:
-    prefix, category = "✅ Safe:", "Safe/Transactional"
-elif 11 <= risk_score <= 50:
-    prefix, category = "⚠️ Warning:", "Suspicious/Unverified"
+if risk_score < 30:
+    intel["isPhishing"] = False
 else:
-    prefix, category = "❌ Danger:", "Confirmed Phishing/Scam"
-
-intel["scamType"] = category
-reply = f"{prefix} {intel['agentNotes'][:60]}"
+    intel["isPhishing"] = True
 ```
+
+This ensures the boolean flag is ALWAYS synchronized with the numeric risk score, eliminating any AI inconsistency.
 
 ---
 
-### The Priority Queue
+### Execution Priority
 
-Rules are evaluated in **strict priority order** to ensure logical consistency:
+Rules are evaluated in **strict order** with early exits:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  STEP 1: Transactional Safeguard (Rule 2)               │
-│  ├── IF: OTP detected AND no forwarding keywords        │
-│  └── THEN: Force Safe classification → EXIT             │
+│  STEP 1: ZERO NULLS & FLAT LISTS                        │
+│  ├── Ensure all artifact lists are [] never null        │
+│  └── Recursively flatten extractedEntities              │
 ├─────────────────────────────────────────────────────────┤
-│  STEP 2: Evidence Mandate (Rule 1)                      │
-│  ├── IF: Physical artifacts exist                       │
+│  STEP 2: OTP Transactional Safeguard (Rule 2)           │
+│  ├── IF: OTP + no artifacts + no forward/share          │
+│  └── THEN: Force Safe → EXIT                            │
+├─────────────────────────────────────────────────────────┤
+│  STEP 3: Evidence = High Risk (Rule 1)                  │
+│  ├── IF: Any physical artifacts exist                   │
 │  └── THEN: Force High Risk → EXIT                       │
 ├─────────────────────────────────────────────────────────┤
-│  STEP 3: Headline Sync (Rule 3)                         │
-│  └── Apply standard prefix based on final risk score    │
+│  STEP 4: Master Boolean Sync (Rule 3)                   │
+│  └── Enforce: riskScore < 30 → isPhishing=False         │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Key Insight:** Rule 2 (Transactional) can override Rule 1 (Evidence) because legitimate OTPs should NEVER be flagged as scams, even if the AI hallucinates artifacts. Conversely, Rule 1 overrides any AI-scored risk below 60 when physical evidence exists.
-
 ---
 
-### UI State Mapping for Frontend Developers
+### Data Sanitization
 
-The `reply` field is designed for direct UI rendering. Parse the prefix to determine visual state:
-
-```javascript
-// React Native / Expo example
-const getUIState = (reply) => {
-  if (reply.startsWith('✅ Safe:')) {
-    return {
-      icon: 'checkmark-circle',
-      color: '#22c55e',  // green-500
-      bgColor: '#dcfce7', // green-100
-      severity: 'safe'
-    };
-  } else if (reply.startsWith('⚠️ Warning:')) {
-    return {
-      icon: 'alert-triangle',
-      color: '#f59e0b',  // amber-500
-      bgColor: '#fef3c7', // amber-100
-      severity: 'warning'
-    };
-  } else if (reply.startsWith('❌ Danger:')) {
-    return {
-      icon: 'close-circle',
-      color: '#ef4444',  // red-500
-      bgColor: '#fee2e2', // red-100
-      severity: 'danger'
-    };
-  }
-};
+#### Zero Nulls Enforcement
+Before any rule logic executes:
+```python
+intel["phishingLinks"] = intel.get("phishingLinks") or []
+intel["upiIds"] = intel.get("upiIds") or []
+intel["bankAccounts"] = intel.get("bankAccounts") or []
+intel["phoneNumbers"] = intel.get("phoneNumbers") or []
+intel["suspiciousKeywords"] = intel.get("suspiciousKeywords") or []
 ```
+
+#### Flat Lists for extractedEntities
+Recursive flattener ensures React Native/Expo compatibility:
+```python
+def flatten_to_strings(val):
+    result = []
+    if isinstance(val, list):
+        for item in val:
+            result.extend(flatten_to_strings(item))
+    elif isinstance(val, dict):
+        for v in val.values():
+            result.extend(flatten_to_strings(v))
+    elif isinstance(val, str):
+        result.append(val)
+    return result
+
+intel["extractedEntities"] = flatten_to_strings(raw_entities)
+```
+
+| Input | Output |
+|-------|--------|
+| `[['url1', 'url2']]` | `['url1', 'url2']` |
+| `[{'link': 'url1'}]` | `['url1']` |
+| `{'0': 'link1', '1': 'link2'}` | `['link1', 'link2']` |
+| `None` | `[]` |
 
 ---
 

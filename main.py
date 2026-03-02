@@ -254,133 +254,121 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
 
 def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str = "") -> tuple:
     """
-    THE FINAL GATE - Enforce hardcoded safety standards before response delivery.
+    THE FINAL THREE - Ultimate sanitization block before response delivery.
     
-    This function acts as the ultimate validation layer, overriding any AI
-    hallucinations or inconsistent scoring with immutable business rules.
+    Implements three deterministic override rules that correct any AI hallucinations
+    and enforce zero-null guarantees for frontend compatibility.
     
-    EXECUTION ORDER (Priority Queue):
-    ---------------------------------
-    1. Transactional Safeguard (Rule 2) - Prevents false positives on OTPs
-    2. Evidence Mandate (Rule 1) - Forces high risk when physical artifacts exist  
-    3. Headline Sync (Rule 3) - Standardizes UI-ready reply prefixes
+    CRITICAL CHECKLIST:
+    -------------------
+    ✓ Zero Nulls: phishingLinks, upiIds, bankAccounts always return [] never null
+    ✓ Flat Lists: extractedEntities is recursively flattened to List[str]
+    ✓ Boolean Sync: isPhishing strictly tied to riskScore threshold (30)
     
-    Each rule has early-exit behavior; once triggered, subsequent rules are skipped.
-    
-    VALIDATION RULES:
-    -----------------
-    Rule 1 (Evidence Mandate):
-        Trigger: phishingLinks OR upiIds OR bankAccounts is non-empty
-        Enforcement:
-            - isPhishing = True
-            - riskScore = max(current, 75)  # Forces > 60
-            - urgencyLevel = "High"
-            - scamType = "Confirmed Phishing/Scam"
-            - agentNotes = "EVIDENCE DETECTED: [artifact list]"
-            - reply = "❌ Danger: ..."
-    
-    Rule 2 (Transactional Safeguard):
-        Trigger: "otp" in message AND NOT ("forward" OR "share" in message)
-        Enforcement:
-            - isPhishing = False
-            - riskScore = 5  # Forces < 10
-            - scamType = "Safe/Transactional"
-            - All artifact lists cleared ([])
-            - reply = "✅ Safe: ..."
-    
-    Rule 3 (Headline Sync):
-        Trigger: No early exit from Rules 1 or 2
-        Enforcement:
-            - Risk 0-10: reply = "✅ Safe: [notes]"
-            - Risk 11-50: reply = "⚠️ Warning: [notes]"
-            - Risk 51-100: reply = "❌ Danger: [notes]"
+    RULE EXECUTION ORDER:
+    ---------------------
+    1. Rule 2 (OTP Transactional Safeguard) - Check first to prevent false positives
+    2. Rule 1 (Evidence = High Risk) - Override with physical evidence
+    3. Rule 3 (Master Boolean Sync) - Final consistency check
     
     Args:
-        intel: Intelligence dictionary containing riskScore, artifacts, and metadata.
-               Expected keys: isPhishing, riskScore, scamType, urgencyLevel,
-               agentNotes, phishingLinks, upiIds, bankAccounts
-        reply: Current reply text from AI or previous processing stage
-        message_text: Original user message for pattern matching (OTP detection)
+        intel: Intelligence dictionary from AI processing
+        reply: Current reply text (may be overwritten)
+        message_text: Original message for OTP pattern detection
     
     Returns:
-        tuple: (updated_intel_dict, updated_reply_string)
-               updated_intel contains enforced values per active rule
-               updated_reply has standardized prefix for UI rendering
-    
-    Example:
-        >>> intel = {"riskScore": 30, "phishingLinks": ["evil.com"], "isPhishing": False}
-        >>> finalize_intelligence(intel, "Unknown", "Click here")
-        ({"riskScore": 75, "phishingLinks": ["evil.com"], "isPhishing": True, ...}, 
-         "❌ Danger: EVIDENCE DETECTED: ...")
+        tuple: (sanitized_intel, sanitized_reply)
     """
     message_lower = message_text.lower()
-    risk_score = intel.get("riskScore", 0)
     
     # =========================================================================
-    # RULE 2: Transactional Safeguard (Check FIRST - overrides everything)
+    # ZERO NULLS ENFORCEMENT - Ensure all artifact lists are never null
     # =========================================================================
-    # If message contains OTP but NO dangerous keywords, FORCE safe classification
-    has_otp = "otp" in message_lower or "verification code" in message_lower
-    has_dangerous = any(kw in message_lower for kw in ["forward", "share", "send to", "share this", "send this"])
+    intel["phishingLinks"] = intel.get("phishingLinks") or []
+    intel["upiIds"] = intel.get("upiIds") or []
+    intel["bankAccounts"] = intel.get("bankAccounts") or []
+    intel["phoneNumbers"] = intel.get("phoneNumbers") or []
+    intel["suspiciousKeywords"] = intel.get("suspiciousKeywords") or []
     
-    if has_otp and not has_dangerous:
-        # FORCE safe classification - this is a transactional message
+    # FLAT LISTS - Ensure extractedEntities is a flat list of strings
+    raw_entities = intel.get("extractedEntities", [])
+    if raw_entities is None:
+        raw_entities = []
+    
+    def flatten_to_strings(val):
+        """Recursively flatten nested lists and extract string values."""
+        result = []
+        if isinstance(val, list):
+            for item in val:
+                result.extend(flatten_to_strings(item))
+        elif isinstance(val, dict):
+            for v in val.values():
+                result.extend(flatten_to_strings(v))
+        elif isinstance(val, str):
+            result.append(val)
+        return result
+    
+    intel["extractedEntities"] = flatten_to_strings(raw_entities)
+    
+    # Extract current values
+    phishing_links = intel["phishingLinks"]
+    upi_ids = intel["upiIds"]
+    bank_accounts = intel["bankAccounts"]
+    risk_score = intel.get("riskScore", 0) or 0
+    
+    # =========================================================================
+    # RULE 2: OTP Transactional Safeguard
+    # Trigger: 'OTP' in text AND (phishingLinks empty AND upiIds empty) AND no 'forward'/'share'
+    # =========================================================================
+    has_otp = "otp" in message_lower
+    has_links_or_upi = len(phishing_links) > 0 or len(upi_ids) > 0
+    has_forward_share = "forward" in message_lower or "share" in message_lower
+    
+    if has_otp and not has_links_or_upi and not has_forward_share:
+        # FORCE safe transactional classification
+        intel["riskScore"] = 5
         intel["isPhishing"] = False
-        intel["riskScore"] = 5  # Must be < 10
         intel["scamType"] = "Safe/Transactional"
         intel["urgencyLevel"] = "Low"
-        intel["agentNotes"] = "Transactional OTP message - No phishing detected"
-        # Clear any extracted artifacts for safe messages
-        intel["phishingLinks"] = []
-        intel["upiIds"] = []
-        intel["bankAccounts"] = []
-        intel["suspiciousKeywords"] = []
-        
-        # Headline for safe
-        reply = "✅ Safe: Legitimate transactional message (OTP/Verification)"
+        intel["agentNotes"] = "Safe: Transactional OTP message"
+        reply = "✅ Safe: Transactional OTP message"
         return intel, reply
     
     # =========================================================================
-    # RULE 1: Evidence Mandate (Physical evidence exists)
+    # RULE 1: Evidence = High Risk
+    # Trigger: phishingLinks, upiIds, OR bankAccounts are NOT empty
     # =========================================================================
-    phishing_links = intel.get("phishingLinks", [])
-    upi_ids = intel.get("upiIds", [])
-    bank_accounts = intel.get("bankAccounts", [])
+    has_evidence = len(phishing_links) > 0 or len(upi_ids) > 0 or len(bank_accounts) > 0
     
-    has_physical_evidence = (
-        (phishing_links and len(phishing_links) > 0 and phishing_links[0]) or
-        (upi_ids and len(upi_ids) > 0 and upi_ids[0]) or
-        (bank_accounts and len(bank_accounts) > 0 and bank_accounts[0])
-    )
-    
-    if has_physical_evidence:
-        # FORCE high-risk classification
+    if has_evidence:
+        # Build artifact list for agentNotes
+        artifacts = []
+        if phishing_links:
+            artifacts.extend(phishing_links[:2])  # Max 2 links
+        if upi_ids:
+            artifacts.extend(upi_ids[:2])  # Max 2 UPI IDs
+        if bank_accounts:
+            artifacts.extend(bank_accounts[:1])  # Max 1 bank account
+        
+        artifact_str = ", ".join(artifacts) if artifacts else "Unknown"
+        
+        # FORCE high-risk values
+        intel["riskScore"] = max(risk_score, 75)
         intel["isPhishing"] = True
-        intel["riskScore"] = max(risk_score, 75)  # MUST be > 60
-        intel["urgencyLevel"] = "High"
-        
-        # Build evidence note
-        evidence_parts = []
-        if phishing_links and len(phishing_links) > 0 and phishing_links[0]:
-            evidence_parts.append(f"Detected {len(phishing_links)} suspicious link(s): {phishing_links[0]}")
-        if upi_ids and len(upi_ids) > 0 and upi_ids[0]:
-            evidence_parts.append(f"Detected {len(upi_ids)} UPI ID(s): {upi_ids[0]}")
-        if bank_accounts and len(bank_accounts) > 0 and bank_accounts[0]:
-            evidence_parts.append(f"Detected {len(bank_accounts)} bank account(s): {bank_accounts[0]}")
-        
-        evidence_str = " | ".join(evidence_parts)
-        intel["agentNotes"] = f"EVIDENCE DETECTED: {evidence_str}. Proceed with caution."
         intel["scamType"] = "Confirmed Phishing/Scam"
-        
-        # Headline for danger
-        reply = f"❌ Danger: {intel['agentNotes'][:80]}..."
+        intel["urgencyLevel"] = "High"
+        intel["agentNotes"] = f"Evidence Found: {artifact_str}"
+        reply = f"❌ Danger: Evidence Found: {artifact_str}"
         return intel, reply
     
     # =========================================================================
-    # RULE 3: Headline Sync (No special cases - standard risk-based prefix)
+    # RULE 3: Master Boolean Sync
+    # Logic: riskScore < 30 → isPhishing=False, riskScore >= 30 → isPhishing=True
     # =========================================================================
-    # Re-evaluate isPhishing based on final risk score
-    intel["isPhishing"] = risk_score > 0
+    if risk_score < 30:
+        intel["isPhishing"] = False
+    else:
+        intel["isPhishing"] = True
     
     # Build headline reply based on risk category
     if 0 <= risk_score <= 10:
