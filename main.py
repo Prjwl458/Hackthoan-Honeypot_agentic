@@ -325,6 +325,31 @@ async def handle_message(
     else:
         message_text = message_data.get_text()
     
+    # =====================================================================
+    # THE ENTRY GATE: WHITELIST PRE-PROCESSING (MUST be first!)
+    # =====================================================================
+    logger.info(f"Checking whitelist for message: {message_text[:50]}...")
+    whitelist_result = pre_process_message(message_text)
+    if whitelist_result:
+        logger.info(f"WHITELIST HIT: {whitelist_result.get('scamType')} - returning immediately")
+        ext_intel = IntelligenceData(
+            bankAccounts=whitelist_result.get("bankAccounts", []),
+            upiIds=whitelist_result.get("upiIds", []),
+            phishingLinks=whitelist_result.get("phishingLinks", []),
+            phoneNumbers=whitelist_result.get("phoneNumbers", []),
+            suspiciousKeywords=whitelist_result.get("suspiciousKeywords", []),
+            agentNotes=whitelist_result.get("agentNotes", ""),
+            scamType=whitelist_result.get("scamType", "Unknown"),
+            urgencyLevel=whitelist_result.get("urgencyLevel", "Low"),
+            riskScore=whitelist_result.get("riskScore", 10),
+            extractedEntities=whitelist_result.get("extractedEntities", [])
+        )
+        return HoneypotResponse(
+            status="success",
+            response=whitelist_result.get("agentNotes", "Safe message detected"),
+            intelligence=ext_intel
+        )
+    
     history = request.get_conversation_history()
     metadata = request.metadata or {}
     
@@ -343,31 +368,6 @@ async def handle_message(
         "text": message_text,
         "timestamp": message_data.get("timestamp", 0) if isinstance(message_data, dict) else getattr(message_data, "timestamp", 0)
     }
-    
-    # =====================================================================
-    # STEP 1: WHITELIST PRE-PROCESSING (skip AI if safe pattern detected)
-    # =====================================================================
-    whitelist_result = pre_process_message(message_text)
-    if whitelist_result:
-        logger.info(f"WHITELIST HIT: {whitelist_result.get('scamType')} - returning immediately")
-        # Build response from whitelist result
-        ext_intel = IntelligenceData(
-            bankAccounts=whitelist_result.get("bankAccounts", []),
-            upiIds=whitelist_result.get("upiIds", []),
-            phishingLinks=whitelist_result.get("phishingLinks", []),
-            phoneNumbers=whitelist_result.get("phoneNumbers", []),
-            suspiciousKeywords=whitelist_result.get("suspiciousKeywords", []),
-            agentNotes=whitelist_result.get("agentNotes", ""),
-            scamType=whitelist_result.get("scamType", "Unknown"),
-            urgencyLevel=whitelist_result.get("urgencyLevel", "Low"),
-            riskScore=whitelist_result.get("riskScore", 10),
-            extractedEntities=whitelist_result.get("extractedEntities", [])
-        )
-        return HoneypotResponse(
-            status="success",
-            response=whitelist_result.get("agentNotes", "Safe message detected"),
-            intelligence=ext_intel
-        )
     
     await db_manager.update_conversation(
         session_id=request.get_session_id(),
@@ -445,7 +445,7 @@ async def handle_message(
         return HoneypotResponse(
             status="success",
             reply=reply,  # This is now the Summary Verdict
-            intelligence=intel
+            intelligence=ext_intel
         )
         
     except Exception as e:

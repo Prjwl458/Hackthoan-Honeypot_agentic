@@ -92,9 +92,8 @@ def apply_evidence_guard(intel: Dict[str, Any]) -> Dict[str, Any]:
     has_bank = bool(intel.get("bankAccounts"))
     has_evidence = has_links or has_upi or has_bank
     
-    logger.info(f"EVIDENCE CHECK: score={current_score}, has_links={has_links}, has_upi={has_upi}, has_bank={has_bank}")
-    
     current_score = intel.get("riskScore", 0)
+    logger.info(f"EVIDENCE CHECK: score={current_score}, has_links={has_links}, has_upi={has_upi}, has_bank={has_bank}")
     
     # If high risk but NO evidence, apply cap
     if current_score > 70 and not has_evidence:
