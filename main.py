@@ -10,6 +10,7 @@ import os
 import asyncio
 import logging
 import re
+import secrets  # v1.2 Titanium: Constant-time comparison for API key validation
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -290,6 +291,9 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
     """
     Verify the API key from request headers for authentication.
     
+    v1.2 Titanium: Uses constant-time comparison (secrets.compare_digest) to prevent
+    timing attacks. All validation failures return 401 with a generic error message.
+    
     Args:
         x_api_key: API key passed in the X-API-Key header.
     
@@ -297,27 +301,28 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
         The API key if valid.
     
     Raises:
-        HTTPException: 403 if API key is invalid or missing.
+        HTTPException: 401 if API key is invalid or missing.
     
     Security Note:
         All production endpoints should require valid API key.
         The key must match the EXPECTED_KEY environment variable.
+        Uses constant-time comparison to prevent timing attacks.
     """
     # Handle missing or empty API key
     if not x_api_key:
-        logger.warning("403: Missing API Key header")
-        raise HTTPException(status_code=403, detail="Missing API Key")
+        logger.debug("API Key validation failed: Missing header")
+        raise HTTPException(status_code=401, detail="Invalid or missing API Key")
     
     # Strip whitespace from provided key
     provided_key = x_api_key.strip()
     
-    # Log key lengths for debugging
-    logger.warning(f"Security: Expected key len={len(EXPECTED_KEY)}, Received key len={len(provided_key)}")
+    # Log key lengths for debugging (only in debug level to keep logs clean)
+    logger.debug(f"Security: Expected key len={len(EXPECTED_KEY)}, Received key len={len(provided_key)}")
     
-    # Compare keys
-    if provided_key != EXPECTED_KEY:
-        logger.warning(f"403: Invalid API Key provided: {provided_key[:4]}...")
-        raise HTTPException(status_code=403, detail="Invalid API Key")
+    # v1.2 Titanium: Constant-time comparison to prevent timing attacks
+    if not secrets.compare_digest(provided_key, EXPECTED_KEY):
+        logger.debug(f"API Key validation failed: Key mismatch")
+        raise HTTPException(status_code=401, detail="Invalid or missing API Key")
     
     return provided_key
 
