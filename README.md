@@ -1,248 +1,349 @@
 # 🔐 Agentic AI Honeypot - Cyber-Intelligence Engine
 
-A production-grade FastAPI application that intercepts scam messages, analyzes them using LLMs, and extracts actionable intelligence for law enforcement and security research.
+**Version 1.2.0 Titanium** | A production-grade FastAPI application engineered for real-time scam detection and intelligence extraction.
 
-## 🚀 Features
+Built with enterprise-grade security patterns including constant-time cryptographic comparison, deterministic rule-based logic, and comprehensive telemetry. Designed for integration with React Native/Expo mobile applications.
 
-- **Evidence-Based Scoring** - No message exceeds Risk 40 without physical artifacts (links, UPI, bank accounts)
-- **Safety Sandwich Pipeline** - Three-layer validation: Whitelist → AI Analysis → Evidence Guard
-- **Real-time Scam Detection** - AI-powered analysis using Llama 3.1 with objective scoring
-- **Intelligence Extraction** - Bank accounts, UPI IDs, phone numbers, phishing links
-- **MongoDB Persistence** - Cloud database with in-memory fallback
-- **Rate Limiting** - 10 requests/minute per session
-- **Production Ready** - Global error handling, health checks, CORS enabled
+---
 
-## 🔒 Security Features
+## 🏗️ System Architecture
 
-### The Deterministic Decision Matrix
-
-The system implements **three immutable validation rules** in strict priority order:
+The system implements a **Defense-in-Depth** strategy with five hardened architectural pillars:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  1. OTP Transactional Safeguard (Rule 2)                        │
-│     └── Force Safe (riskScore=5) if OTP without artifacts       │
-├─────────────────────────────────────────────────────────────────┤
-│  2. Evidence Mandate (Rule 1) [OVERRIDES Rule 2]                │
-│     └── Force High Risk (riskScore≥75) if artifacts found       │
-├─────────────────────────────────────────────────────────────────┤
-│  3. Master Boolean Sync (Rule 3)                                │
-│     └── isPhishing = (riskScore >= 30)                          │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         v1.2.0 TITANIUM ARCHITECTURE                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  PILLAR 1: THE ARMOR (Security)                                             │
+│  ├── Constant-Time API Key Validation (secrets.compare_digest)              │
+│  ├── SlowAPI Rate Limiting (10 req/min, memory-backed)                      │
+│  └── Restricted CORS (localhost:19000, production domain)                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  PILLAR 2: THE HEART (Reliability)                                          │
+│  ├── 15-Second AI Timeout with 504 Gateway Timeout                          │
+│  ├── Input Normalization (invisible Unicode removal)                        │
+│  └── Health Check Endpoint (/health)                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  PILLAR 3: THE DASHBOARD (Telemetry)                                        │
+│  ├── Latency Tracking (latency_ms in every response)                        │
+│  └── Version/Timestamp Metadata (production observability)                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  PILLAR 4: THE FINAL GATEKEEPER (Deterministic Logic)                       │
+│  ├── Evidence Mandate (artifacts → riskScore ≥ 75)                          │
+│  ├── OTP Safeguard (clean OTP → riskScore = 5)                              │
+│  └── Boolean Sync (isPhishing matches threshold ≥ 70)                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  PILLAR 5: THE FILTER (Data Integrity)                                      │
+│  ├── Zero-Null Policy (never return null, always "")                        │
+│  └── Recursive Flattening (nested AI output sanitization)                   │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Override Logic:** Rule 1 (Evidence) overrides Rule 2 (OTP Safeguard) if a phishing link is detected in an OTP message.
+---
 
-### Social Engineering Detection
+## 🔒 Security Architecture
 
-Detects sophisticated **OTP forwarding scams** - attacks using legitimate-looking OTPs with dangerous forwarding instructions:
+### 1. Constant-Time API Key Validation
 
-| Message | Detection | Result |
-|---------|-----------|--------|
-| "Your OTP is 1234" | No danger keywords | ✅ Safe (Risk 5) |
-| "Your OTP is 1234. Forward to agent" | "forward" detected | ⚠️ Warning (Risk 30+) |
-| "Your OTP is 1234. Click evil.com" | Link detected | ❌ Danger (Risk 75+) |
+Prevents timing attacks using `secrets.compare_digest()` for cryptographic comparison:
 
-**Danger Keywords:** `forward`, `share`, `send to`, `share this`, `send this`
+```python
+import secrets
 
-### The 'Zero-Null' Policy
+# Constant-time comparison prevents timing analysis attacks
+if not secrets.compare_digest(provided_key, EXPECTED_KEY):
+    raise HTTPException(status_code=401, detail="Invalid or missing API Key")
+```
 
-All artifact fields are guaranteed to return an empty list `[]` and **never null**, ensuring frontend stability:
+**Security Properties:**
+- Execution time is independent of key position (no early exit)
+- Uses HMAC-based comparison (cryptographically secure)
+- Unified error message prevents information leakage
+- Silent validation (debug-level logging only)
+
+### 2. SlowAPI Rate Limiting
+
+Production-grade rate limiting with in-memory storage:
+
+```python
+from slowapi import Limiter
+
+limiter = Limiter(key_func=get_remote_address, storage_uri='memory://')
+
+@app.post("/message")
+@limiter.limit("10/minute")
+async def handle_message(...):
+```
+
+**Configuration:**
+- **Limit:** 10 requests per minute per IP address
+- **Storage:** In-memory (`memory://`) for Render deployment
+- **Response:** `429 Too Many Requests` when exceeded
+- **Headers:** Exposes `X-RateLimit-Limit` and `X-RateLimit-Remaining`
+
+### 3. CORS Restriction
+
+Prevents unauthorized cross-origin access:
+
+```python
+ALLOWED_ORIGINS = [
+    "http://localhost:19000",  # Expo development
+    "http://localhost:3000",   # React development
+    "https://your-production-domain.com",
+]
+```
+
+---
+
+## ⚡ Reliability Features
+
+### 15-Second AI Timeout
+
+Prevents resource exhaustion with strict timeout handling:
+
+```python
+try:
+    intel, reply = await asyncio.wait_for(
+        asyncio.gather(
+            agent.extract_intelligence(...),
+            agent.generate_response(...)
+        ),
+        timeout=15.0
+    )
+except asyncio.TimeoutError:
+    raise HTTPException(status_code=504, detail="AI analysis timed out")
+```
+
+**Behavior:**
+- Hard 15-second limit on AI processing
+- Returns clean `504 Gateway Timeout` (not partial data)
+- Includes latency telemetry even on failure
+
+### Input Normalization
+
+Sanitizes user input before AI processing:
+
+```python
+def normalize_input(text: str) -> str:
+    # Remove invisible Unicode characters
+    invisible_chars = r'[\u200b\u200c\u200d\ufeff\x00-\x08\x0b\x0c\x0e-\x1f\x7f]'
+    text = re.sub(invisible_chars, '', text)
+    text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+    return text.strip()
+```
+
+**Removes:**
+- Zero-width spaces (`\u200b`, `\u200c`, `\u200d`)
+- Byte order marks (`\ufeff`)
+- ASCII control characters
+- Excessive whitespace
+
+---
+
+## 🎯 The Triple-Threat Logic
+
+Three immutable validation rules enforced as the **Final Gatekeeper**:
+
+### Rule 1: Evidence Mandate
+
+**Trigger:** `phishingLinks` OR `upiIds` are NOT empty
+
+| Field | Enforced Value |
+|-------|---------------|
+| `riskScore` | `max(current, 75)` |
+| `isPhishing` | `True` |
+| `scamType` | `"Confirmed Phishing/Scam"` |
+| `agentNotes` | `"Evidence Found: [artifacts]"` |
+
+**Logic:** Physical evidence (links, UPI IDs) forces high-risk classification regardless of AI output.
+
+### Rule 2: OTP Transactional Safeguard
+
+**Trigger:** `"OTP" in text` AND `no links/UPIs` AND `no "forward"/"share"`
+
+| Field | Enforced Value |
+|-------|---------------|
+| `riskScore` | `5` |
+| `isPhishing` | `False` |
+| `scamType` | `"Safe/Transactional"` |
+
+**Logic:** Legitimate OTPs (without forwarding instructions) are never flagged as scams.
+
+### Rule 3: Boolean Sync
+
+**Trigger:** Applied to ALL responses
+
+| Condition | `isPhishing` Value |
+|-----------|-------------------|
+| `riskScore < 70` | `False` |
+| `riskScore >= 70` | `True` |
+
+**Logic:** The boolean flag is strictly synchronized with the risk threshold.
+
+### Execution Priority
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. OTP Safeguard (Rule 2) - Prevents false positives   │
+├─────────────────────────────────────────────────────────┤
+│  2. Evidence Mandate (Rule 1) - Overrides if artifacts  │
+├─────────────────────────────────────────────────────────┤
+│  3. Boolean Sync (Rule 3) - Final consistency check     │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📊 Data Contract
+
+### Response Structure
+
+Every API response follows this deterministic schema:
+
+```json
+{
+  "status": "success",
+  "reply": "❌ Danger: Evidence Found: evil.com",
+  "intelligence": {
+    "isPhishing": true,
+    "riskScore": 75,
+    "scamType": "Confirmed Phishing/Scam",
+    "urgencyLevel": "High",
+    "agentNotes": "Evidence Found: evil.com",
+    "phishingLinks": ["evil.com"],
+    "upiIds": [],
+    "bankAccounts": [],
+    "phoneNumbers": [],
+    "suspiciousKeywords": ["verify", "account"],
+    "extractedEntities": ["evil.com"]
+  },
+  "version": "1.2.0",
+  "timestamp": "2024-01-15T10:30:00.000000",
+  "latency_ms": 245
+}
+```
+
+### Telemetry Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | string | API version (e.g., "1.2.0") |
+| `timestamp` | ISO-8601 | UTC timestamp of response |
+| `latency_ms` | integer | Request processing time in milliseconds |
+
+### Zero-Null Policy
+
+All array fields are guaranteed to return empty arrays `[]`, never `null`:
 
 ```python
 # Implementation
 intel["phishingLinks"] = intel.get("phishingLinks") or []
 intel["upiIds"] = intel.get("upiIds") or []
 intel["bankAccounts"] = intel.get("bankAccounts") or []
+intel["phoneNumbers"] = intel.get("phoneNumbers") or []
+intel["suspiciousKeywords"] = intel.get("suspiciousKeywords") or []
 ```
 
-| Input | Output |
-|-------|--------|
-| `null` | `[]` |
-| `undefined` | `[]` |
-| `['evil.com']` | `['evil.com']` |
+### Recursive Flattening
 
-This prevents React Native crashes when iterating over arrays.
-
-### Data Sanitization (The Flattener)
-
-The `flatten_to_strings()` function recursively sanitizes AI output to ensure `extractedEntities` is always `List[str]`:
+The `extractedEntities` field is recursively flattened to ensure `List[str]`:
 
 ```python
-# Handles nested structures
-[['url1', 'url2']]           → ['url1', 'url2']
-[{'link': 'url1'}]           → ['url1']
-{'0': 'url1', '1': 'url2'}   → ['url1', 'url2']
-None                         → []
+# Handles nested AI output
+[['url1', 'url2']]         → ['url1', 'url2']
+[{'link': 'url1'}]         → ['url1']
+{'0': 'url1', '1': 'url2'} → ['url1', 'url2']
+None                       → []
 ```
 
-**Frontend Compatibility:**
-```javascript
-// Safe iteration - always works
-intel.extractedEntities.map(item => <Text>{item}</Text>)
-```
+---
 
-### Visual Legend for Frontend
+## 🎨 Visual Legend
 
-The API returns prefixed replies for direct UI rendering:
+Risk scores map to standardized UI components:
 
-| Risk Score | Prefix | Category | Color | Icon | Action |
-|------------|--------|----------|-------|------|--------|
-| 0-29 | `✅ Safe:` | Safe/Transactional | Green | Checkmark | None |
-| 30-74 | `⚠️ Warning:` | Suspicious/Unverified | Amber | Triangle | Review |
-| 75-100 | `❌ Danger:` | Confirmed Phishing/Scam | Red | X-Circle | Block |
+| Risk Score | Prefix | Color | Icon | Action |
+|------------|--------|-------|------|--------|
+| 0-69 | `✅ Safe:` | Green (#22c55e) | Checkmark | None |
+| 70-100 | `❌ Danger:` | Red (#ef4444) | X-Circle | Block Immediately |
 
 **Example Responses:**
 ```json
 {"reply": "✅ Safe: Transactional OTP message"}
-{"reply": "⚠️ Warning: Suspicious pattern detected"}
 {"reply": "❌ Danger: Evidence Found: evil.com"}
 ```
 
-### Evidence-Based Risk Capping
+---
 
-To prevent **"Honeypot Bias"**, the system implements a **hard risk cap**:
-
-| Evidence Present | Max Risk | Classification |
-|------------------|----------|----------------|
-| None | 40 | Unverified/Suspicious |
-| Links only | 60 | Potential Phishing |
-| UPI/Bank + Links | 80 | High Risk Scam |
-| All artifacts + PII request | 100 | Critical Threat |
-
-A message cannot exceed Risk 40 without at least one physical artifact (phishingLinks, upiIds, bankAccounts).
-
-## 🏗️ System Architecture (The Safety Sandwich)
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Mobile App    │────▶│   PRE-PROCESS   │────▶│     PROCESS     │────▶│  POST-PROCESS   │
-│   (Expo/React)  │     │   (Whitelist)   │     │  (AI Analysis)  │     │ (Evidence Guard)│
-└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
-                                                                │
-                                                                ▼
-                         ┌──────────────────┐             ┌──────────────────┐
-                         │   MongoDB Atlas  │◀────────────│   Response API   │
-                         │   (scam_logs)    │             │   (Risk Score)   │
-                         └──────────────────┘             └──────────────────┘
-```
-
-### The Three-Layer Validation Pipeline
-
-| Layer | Purpose | Key Logic |
-|-------|---------|-----------|
-| **Pre-Process** | Fast-path legitimate messages | OTP/Banking patterns → immediate safe classification |
-| **Process** | Deep AI analysis of non-whitelist messages | Evidence-based scoring with LLM |
-| **Post-Process** | Prevent false positives from urgency alone | **Hard cap at Risk 40** without physical artifacts |
-
-### Evidence Requirement Rule
-A message **CANNOT** exceed **Risk 40** unless at least one physical artifact is extracted:
-- `phishingLinks` (suspicious URLs)
-- `upiIds` (payment addresses)
-- `bankAccounts` (account numbers)
-
-This prevents the "Honeypot Bias" where urgency language alone triggers false high-risk classifications.
-
-### Components
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| Web Framework | FastAPI 0.109.0 | Async API server |
-| LLM Engine | Llama 3.1 8B | Evidence-based scam analysis |
-| Database | MongoDB Atlas | Persistent intelligence storage |
-| HTTP Client | httpx | Non-blocking API calls |
-| Validation | Pydantic 2.5.3 | Schema enforcement with `ensure_list` |
-| Data Integrity | `ensure_list` helper | Converts AI dicts to Pydantic-compliant lists |
-
-## 📦 Setup
+## 🛠️ Setup
 
 ### 1. Clone & Install
 
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd honeypot-ai
-
-# Create virtual environment
 python -m venv venv
 venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 ### 2. Configure Environment
 
 ```bash
-# Copy the template
 copy .env.example .env
-
 # Edit .env with your keys:
 # - API_KEY: Your secure API key
 # - OPENROUTER_API_KEY: Get from https://openrouter.ai/
-# - MONGODB_URI: Get from MongoDB Atlas (optional)
+# - PRODUCTION_DOMAIN: Your production domain (for CORS)
 ```
 
 ### 3. Run the Server
 
 ```bash
 # Development
-python -m uvicorn main:app --host 127.0.0.1 --port 9000 --reload
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Production
-python -m uvicorn main:app --host 0.0.0.0 --port 9000
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ### 4. Health Check
 
 ```bash
-curl http://127.0.0.1:9000/health
-# Response: {"status":"online"}
+curl http://localhost:8000/health
+# Response: {"status": "online", "version": "1.2.0", "timestamp": "..."}
 ```
 
-## 📡 Sample API Request
+---
 
-### POST /message
+## 🧪 Testing
+
+### PowerShell Test
+
+```powershell
+$headers = @{
+    "X-API-Key" = "prajwal_hackathon_key_2310"
+    "Content-Type" = "application/json"
+}
+$body = '{"message": {"text": "Your OTP is 123456"}, "sessionId": "test123"}'
+Invoke-WebRequest -Uri "http://localhost:8000/message" -Method POST -Headers $headers -Body $body
+```
+
+### cURL Test
 
 ```bash
-curl -X POST http://127.0.0.1:9000/message \
+curl -X POST http://localhost:8000/message \
+  -H "X-API-Key: prajwal_hackathon_key_2310" \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your_api_key_here" \
-  -d '{
-    "message": "Your Netflix account has been suspended. Verify now to restore: netflix-verify.com/restore",
-    "senderId": "+1-555-0123",
-    "sessionId": "session_001"
-  }'
+  -d '{"message": {"text": "Click here: evil.com"}, "sessionId": "test123"}'
 ```
 
-### Response
-
-```json
-{
-  "status": "success",
-  "response": "Threat Detected: Phishing attempt - Suspicious Netflix impersonation scam",
-  "intelligence": {
-    "scamType": "Phishing",
-    "urgencyLevel": "High",
-    "riskScore": 85,
-    "extractedEntities": {
-      "phishingLinks": ["netflix-verify.com"],
-      "phoneNumbers": ["+1-555-0123"],
-      "bankAccounts": [],
-      "upiIds": []
-    }
-  }
-}
-```
-
-## 🔒 Security
-
-- All secrets loaded from environment variables (`.env`)
-- API key required for all endpoints
-- Rate limited: 10 requests/minute per session
-- CORS configured for production deployment
+---
 
 ## 📄 License
 
-MIT License 
+MIT License - See [LICENSE](LICENSE) for details.
+
+---
+
+**Engineered for Production** | **Class 11 CS Portfolio Project** | **Version 1.2.0 Titanium**
