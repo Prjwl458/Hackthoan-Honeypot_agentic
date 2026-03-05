@@ -392,22 +392,51 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
     risk_score = intel.get("riskScore", 0) or 0
     
     # =========================================================================
-    # RULE 2: OTP Transactional Safeguard
-    # Trigger: 'OTP' in text AND (phishingLinks empty AND upiIds empty) AND no 'forward'/'share'
+    # RULE 2: Intent-Based OTP Logic
+    # Distinguish malicious intent vs protective intent in OTP messages
     # =========================================================================
-    has_otp = "otp" in message_lower
+    has_otp = "otp" in message_lower or "verification code" in message_lower
     has_links_or_upi = len(phishing_links) > 0 or len(upi_ids) > 0
-    has_forward_share = "forward" in message_lower or "share" in message_lower
     
-    if has_otp and not has_links_or_upi and not has_forward_share:
-        # FORCE safe transactional classification
-        intel["riskScore"] = 5
-        intel["isPhishing"] = False
-        intel["scamType"] = "Safe/Transactional"
-        intel["urgencyLevel"] = "Low"
-        intel["agentNotes"] = "Safe: Transactional OTP message"
-        reply = "✅ Safe: Transactional OTP message"
-        return intel, reply
+    # Malicious intent keywords (social engineering)
+    malicious_intent = any(kw in message_lower for kw in [
+        "forward", "send", "provide", "share with", "give to", "text to", "mail to"
+    ])
+    
+    # Protective intent keywords (legitimate warnings)
+    protective_intent = any(kw in message_lower for kw in [
+        "do not share", "never give", "don't share", "do not give", "never share",
+        "confidential", "private", "sensitive"
+    ])
+    
+    if has_otp and not has_links_or_upi:
+        if malicious_intent and not protective_intent:
+            # Malicious OTP - Social engineering attempt
+            intel["riskScore"] = 100
+            intel["isPhishing"] = True
+            intel["scamType"] = "Social Engineering"
+            intel["urgencyLevel"] = "High"
+            intel["agentNotes"] = "CRITICAL: OTP with malicious forwarding instructions detected"
+            reply = "❌ Danger: Social engineering - OTP forwarding scam"
+            return intel, reply
+        elif protective_intent:
+            # Protective OTP - Legitimate warning message
+            intel["riskScore"] = 5
+            intel["isPhishing"] = False
+            intel["scamType"] = "Safe/Transactional"
+            intel["urgencyLevel"] = "Low"
+            intel["agentNotes"] = "Safe: OTP with protective security warning"
+            reply = "✅ Safe: Legitimate OTP with security warning"
+            return intel, reply
+        else:
+            # Neutral OTP - No clear intent indicators
+            intel["riskScore"] = 5
+            intel["isPhishing"] = False
+            intel["scamType"] = "Safe/Transactional"
+            intel["urgencyLevel"] = "Low"
+            intel["agentNotes"] = "Safe: Transactional OTP message"
+            reply = "✅ Safe: Transactional OTP message"
+            return intel, reply
     
     # =========================================================================
     # v1.2 Titanium RULE 1: Evidence Mandate
@@ -516,15 +545,8 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    """Root endpoint with service info."""
-    db_status = "connected" if db_manager._connection_verified and not db_manager._use_in_memory else "fallback"
-    return {
-        "status": "success",
-        "service": "Agentic AI Honeypot",
-        "version": API_VERSION,
-        "database": db_status,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    """Lightweight root endpoint for health checks."""
+    return {"status": "online"}
 
 
 @app.post("/message", response_model=HoneypotResponse)
@@ -747,17 +769,18 @@ async def handle_message(
             return result
         
         # Build clean intel dict for logging and response
+        # Deduplicate UPIs and links (Fix 3: Entity Deduplication)
         intel_dict = {
             "bankAccounts": ensure_list(intel.get("bankAccounts", [])),
-            "upiIds": ensure_list(intel.get("upiIds", [])),
-            "phishingLinks": ensure_list(intel.get("phishingLinks", [])),
+            "upiIds": list(set(ensure_list(intel.get("upiIds", [])))),
+            "phishingLinks": list(set(ensure_list(intel.get("phishingLinks", [])))),
             "phoneNumbers": ensure_list(intel.get("phoneNumbers", [])),
             "suspiciousKeywords": ensure_list(intel.get("suspiciousKeywords", [])),
             "agentNotes": intel.get("agentNotes", ""),
             "scamType": intel.get("scamType", "Unknown"),
             "urgencyLevel": intel.get("urgencyLevel", "Low"),
             "riskScore": intel.get("riskScore", 0),
-            "extractedEntities": ensure_list(intel.get("extractedEntities", []))
+            "extractedEntities": list(set(ensure_list(intel.get("extractedEntities", []))))
         }
         
         # Apply Synchronization Rules: Boolean Sync, Note-Evidence Link, Reply-Score Sanitization

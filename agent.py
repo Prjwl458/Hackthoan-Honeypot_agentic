@@ -210,6 +210,10 @@ class ScamAgent:
             "temperature": 0,
         }
         
+        # Fix 2: Strict JSON Enforcement - Add response_format for JSON mode
+        if response_as_json:
+            payload["response_format"] = {"type": "json_object"}
+        
         response = await client.post(
             self.openrouter_url,
             headers=headers,
@@ -252,7 +256,7 @@ class ScamAgent:
         """
         
         messages = [
-            {"role": "system", "content": "You are an objective security analyst. Only flag as scam when physical evidence exists."},
+            {"role": "system", "content": "You are a JSON-only response engine. Output raw JSON. No conversational text. No markdown blocks."},
             {"role": "user", "content": prompt}
         ]
         
@@ -455,7 +459,10 @@ class ScamAgent:
         DO NOT include any explanation or markdown formatting.
         """
         
-        messages = [{"role": "user", "content": llm_prompt}]
+        messages = [
+            {"role": "system", "content": "You are a JSON-only response engine. Output raw JSON. No conversational text. No markdown blocks."},
+            {"role": "user", "content": llm_prompt}
+        ]
         
         try:
             llm_response = await self._call_llm_api(messages, response_as_json=True)
