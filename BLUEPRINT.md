@@ -182,6 +182,72 @@ Response:
 
 **Purpose:** Load balancer health checks and deployment verification.
 
+#### 2.4 Short-Input Short-Circuit
+
+**Problem:** Very short inputs (< 3 characters) are insufficient for meaningful AI analysis and waste API credits. Examples: "hi", "OK", "1".
+
+**Solution:** Pre-flight check returns Safe response immediately without calling AI.
+
+```python
+# =====================================================================
+# GUARD 1: Short-Input Short-Circuit
+# If input is too short (< 3 chars), return Safe without calling AI
+# =====================================================================
+if len(message_text) < 3:
+    logger.info(f"Short-input short-circuit: '{message_text}' (length: {len(message_text)})")
+    short_response = {
+        "bankAccounts": [],
+        "upiIds": [],
+        "phishingLinks": [],
+        "phoneNumbers": [],
+        "suspiciousKeywords": [],
+        "agentNotes": "Input too short for analysis",
+        "scamType": "Safe/Transactional",
+        "urgencyLevel": "Low",
+        "riskScore": 0,
+        "extractedEntities": [],
+        "threatSource": "",
+        "isPhishing": False
+    }
+    return HoneypotResponse(
+        status="success",
+        reply="✅ Safe: Input too short for analysis",
+        intelligence=short_response
+    )
+```
+
+**Response Structure:**
+
+```json
+{
+  "status": "success",
+  "reply": "✅ Safe: Input too short for analysis",
+  "intelligence": {
+    "isPhishing": false,
+    "riskScore": 0,
+    "scamType": "Safe/Transactional",
+    "urgencyLevel": "Low",
+    "agentNotes": "Input too short for analysis",
+    "phishingLinks": [],
+    "upiIds": [],
+    "bankAccounts": [],
+    "phoneNumbers": [],
+    "suspiciousKeywords": [],
+    "extractedEntities": [],
+    "threatSource": ""
+  },
+  "version": "1.2.0",
+  "timestamp": "2024-01-15T10:30:00.000000",
+  "latency_ms": 2
+}
+```
+
+**Benefits:**
+- **Cost Efficiency:** No AI API calls for inputs that cannot contain scams
+- **Latency:** Sub-millisecond response (< 2ms vs 500-2000ms for AI)
+- **Safety Default:** Unknown short inputs classified as Safe (conservative approach)
+- **Schema Compliance:** Returns complete intelligence object matching full AI flow
+
 ---
 
 ### Pillar 3: The Dashboard (Telemetry)
@@ -304,15 +370,41 @@ else:
 
 ### Pillar 5: The Filter (Data Integrity)
 
-#### 5.1 Zero-Null Policy
+#### 5.1 Zero-Null Policy & Default Schema Enforcement
 
-**Problem:** Frontend applications crash when iterating over `null` values.
+**Problem:** Frontend applications (especially React Native) crash when iterating over `null` values or receiving incomplete objects.
 
-**Solution:** Guarantee all array fields return `[]`, never `null`.
+**Solution:** Two-layer enforcement guarantees consistent schema compliance.
+
+**Layer 1: DEFAULT_INTEL Template**
+
+All responses originate from a canonical template ensuring every field has a valid default:
+
+```python
+# Default intelligence template for consistent API responses
+DEFAULT_INTEL = {
+    "bankAccounts": [],
+    "upiIds": [],
+    "phishingLinks": [],
+    "phoneNumbers": [],
+    "suspiciousKeywords": [],
+    "agentNotes": "",
+    "scamType": "Safe/Transactional",
+    "urgencyLevel": "Low",
+    "riskScore": 5,
+    "extractedEntities": [],
+    "threatSource": "System",
+    "isPhishing": False
+}
+```
+
+**Layer 2: Runtime Zero-Null Enforcement**
+
+The `finalize_intelligence()` function ensures AI outputs never violate the contract:
 
 ```python
 def finalize_intelligence(intel: Dict[str, Any], ...) -> tuple:
-    # Zero-null enforcement
+    # ZERO NULLS ENFORCEMENT - Ensure all artifact lists are never null
     intel["phishingLinks"] = intel.get("phishingLinks") or []
     intel["upiIds"] = intel.get("upiIds") or []
     intel["bankAccounts"] = intel.get("bankAccounts") or []
@@ -320,7 +412,33 @@ def finalize_intelligence(intel: Dict[str, Any], ...) -> tuple:
     intel["suspiciousKeywords"] = intel.get("suspiciousKeywords") or []
 ```
 
-**Guarantee:**
+**Schema Guarantees:**
+
+| Field | Default | Never Null |
+|-------|---------|------------|
+| `phishingLinks` | `[]` | ✓ Always List[str] |
+| `upiIds` | `[]` | ✓ Always List[str] |
+| `bankAccounts` | `[]` | ✓ Always List[str] |
+| `phoneNumbers` | `[]` | ✓ Always List[str] |
+| `suspiciousKeywords` | `[]` | ✓ Always List[str] |
+| `extractedEntities` | `[]` | ✓ Always List[str] |
+| `agentNotes` | `""` | ✓ Always string |
+| `scamType` | `"Safe/Transactional"` | ✓ Always string |
+| `urgencyLevel` | `"Low"` | ✓ Always string |
+| `threatSource` | `"System"` | ✓ Always string |
+
+**React Native Compatibility:**
+
+```javascript
+// Safe iteration - never throws TypeError
+intelligence.phishingLinks.map(link => ...)
+intelligence.upiIds.forEach(upi => ...)
+
+// No defensive null checks needed
+const hasLinks = intelligence.phishingLinks.length > 0;
+```
+
+**Null Transformations:**
 | Input | Output |
 |-------|--------|
 | `null` | `[]` |

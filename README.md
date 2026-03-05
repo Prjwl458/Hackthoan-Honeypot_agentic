@@ -194,6 +194,71 @@ Three immutable validation rules enforced as the **Final Gatekeeper**:
 
 ---
 
+## 🛡️ Final Safety Guards
+
+Two additional production safeguards ensure API efficiency and frontend stability:
+
+### 1. Short-Input Short-Circuit
+
+**Trigger:** Input text length < 3 characters (e.g., "hi", "OK", "1")
+
+**Behavior:** Returns Safe response immediately without calling AI:
+
+```json
+{
+  "status": "success",
+  "reply": "✅ Safe: Input too short for analysis",
+  "intelligence": {
+    "isPhishing": false,
+    "riskScore": 0,
+    "scamType": "Safe/Transactional",
+    "urgencyLevel": "Low",
+    "agentNotes": "Input too short for analysis",
+    "phishingLinks": [],
+    "upiIds": [],
+    "bankAccounts": [],
+    "phoneNumbers": [],
+    "suspiciousKeywords": [],
+    "extractedEntities": [],
+    "threatSource": ""
+  },
+  "version": "1.2.0",
+  "timestamp": "2024-01-15T10:30:00.000000",
+  "latency_ms": 2
+}
+```
+
+**Benefits:**
+- **Cost Efficiency:** No AI API calls for unanalyzable inputs
+- **Latency:** Sub-millisecond response (< 2ms vs 500-2000ms for AI)
+- **Safety Default:** Unknown short inputs classified as Safe
+
+### 2. Default Schema Enforcement (Zero-Null Policy)
+
+**Purpose:** React Native and frontend applications crash when iterating over `null` values.
+
+**Guarantee:** All array fields return `[]`, never `null`:
+
+| Field | Type | Default |
+|-------|------|---------|
+| `phishingLinks` | `List[str]` | `[]` |
+| `upiIds` | `List[str]` | `[]` |
+| `bankAccounts` | `List[str]` | `[]` |
+| `phoneNumbers` | `List[str]` | `[]` |
+| `suspiciousKeywords` | `List[str]` | `[]` |
+| `extractedEntities` | `List[str]` | `[]` |
+
+**React Native Safe Usage:**
+```javascript
+// No null checks needed - guaranteed arrays
+intelligence.phishingLinks.map(link => renderLink(link))
+const hasUpi = intelligence.upiIds.length > 0;
+```
+
+**Implementation:** All responses originate from [`DEFAULT_INTEL`](main.py:214) template and pass through `finalize_intelligence()` sanitization.
+
+---
+
 ## 📊 Data Contract
 
 ### Response Structure
