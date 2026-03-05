@@ -606,6 +606,32 @@ async def handle_message(
     logger.info(f"Normalized message: '{message_text[:50]}...' (original length: {len(raw_text)}, normalized length: {len(message_text)})")
     
     # =====================================================================
+    # GUARD 1: Short-Input Short-Circuit
+    # If input is too short (< 3 chars), return Safe without calling AI
+    # =====================================================================
+    if len(message_text) < 3:
+        logger.info(f"Short-input short-circuit: '{message_text}' (length: {len(message_text)})")
+        short_response = {
+            "bankAccounts": [],
+            "upiIds": [],
+            "phishingLinks": [],
+            "phoneNumbers": [],
+            "suspiciousKeywords": [],
+            "agentNotes": "Input too short for analysis",
+            "scamType": "Safe/Transactional",
+            "urgencyLevel": "Low",
+            "riskScore": 0,
+            "extractedEntities": [],
+            "threatSource": "",
+            "isPhishing": False
+        }
+        return HoneypotResponse(
+            status="success",
+            reply="✅ Safe: Input too short for analysis",
+            intelligence=short_response
+        )
+    
+    # =====================================================================
     # THE ENTRY GATE: WHITELIST PRE-PROCESSING (MUST be first!)
     # =====================================================================
     logger.info(f"Checking whitelist for message: {message_text[:50]}...")
