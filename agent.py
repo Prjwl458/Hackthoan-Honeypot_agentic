@@ -33,13 +33,41 @@ def pre_process_message(message: str) -> Optional[Dict[str, Any]]:
     """
     message_lower = message.lower()
     
+    # =========================================================================
+    # v1.3.2 SAFE-PASS GATE: Check protective patterns FIRST
+    # =========================================================================
+    protective_patterns = ["do not share", "never share", "don't share", "never give", "pls do not"]
+    has_protective = any(prot in message_lower for prot in protective_patterns)
+    
+    # =========================================================================
+    # v1.3.2 PHISHING TRAP: Check dangerous keywords SECOND
+    # =========================================================================
+    dangerous_keywords = ['forward', 'share with', 'send to', 'share this', 'send this', 'share it', 'give this', 'provide this']
+    has_dangerous = any(dangerous in message_lower for dangerous in dangerous_keywords)
+    
     # OTP Pattern: 4-6 digit code with keywords
     otp_pattern = r'\b\d{4,6}\b'
     otp_keywords = ['otp', 'verification', 'code', 'entered', 'submitted']
-    if re.search(otp_pattern, message) and any(kw in message_lower for kw in otp_keywords):
-        # Social Engineering Detection: Check for dangerous forwarding instructions
-        dangerous_keywords = ['forward', 'share with', 'send to', 'share this', 'send this']
-        if any(dangerous in message_lower for dangerous in dangerous_keywords):
+    has_otp = re.search(otp_pattern, message) and any(kw in message_lower for kw in otp_keywords)
+    
+    if has_otp:
+        # Check for PROTECTIVE first (Safe)
+        if has_protective:
+            logger.info("PROTECTIVE OTP: Message has 'do not share' warning")
+            return {
+                "riskScore": 5,
+                "scamType": "Safe/Transactional",
+                "urgencyLevel": "Low",
+                "agentNotes": "Safe: OTP with protective security warning",
+                "extractedEntities": [],
+                "bankAccounts": [],
+                "upiIds": [],
+                "phishingLinks": [],
+                "phoneNumbers": [],
+                "suspiciousKeywords": []
+            }
+        # Check for DANGEROUS second (Scam)
+        elif has_dangerous:
             logger.info("SOCIAL ENGINEERING DETECTED: OTP with forwarding instructions")
             return {
                 "riskScore": 100,
@@ -53,7 +81,7 @@ def pre_process_message(message: str) -> Optional[Dict[str, Any]]:
                 "phoneNumbers": [],
                 "suspiciousKeywords": ["forward", "otp", "share"]
             }
-        
+        # No protective or dangerous - normal OTP
         logger.info("WHITELIST MATCH: OTP pattern detected")
         return {
             "riskScore": 5,

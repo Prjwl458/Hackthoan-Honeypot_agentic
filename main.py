@@ -29,7 +29,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# v1.3.2 Intent Gate: API Version
+# v1.3.2 Safe-Pass Gate: API Version
 API_VERSION = "1.3.2"
 
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
@@ -1103,8 +1103,8 @@ async def handle_message(
         logger.info(f"FINAL INTEL OBJECT: {intel_dict}")
         
         # =========================================================================
-        # v1.3.2 INTENT GATE - FINAL SAFETY GATE
-        # Principle: A scammer asks you to DO something. A bank asks you NOT to do something.
+        # v1.3.2 SAFE-PASS GATE - PRIORITY 1
+        # Principle: Legitimate messages have codes + warnings. Scammers have requests.
         # =========================================================================
         try:
             # Normalize text for check
@@ -1114,47 +1114,71 @@ async def handle_message(
             f_score = intel_dict.get("riskScore", 0) or 0
             
             # =========================================================================
-            # 1. PRE-EMPTIVE WHITELIST (Identify Automated Deliveries)
-            # If the message contains a code AND a 'Do Not Share' warning, it is SAFE.
+            # 1. REGEX FOR NUMERIC OTP: Check for 6-8 digit code
             # =========================================================================
-            is_warning = any(w in t_low for w in ["do not", "never", "don't", "pls do not"])
-            has_otp_code = any(char.isdigit() for char in t_low) and len(t_low) > 5
+            import re
+            otp_code_pattern = re.search(r'\b\d{6,8}\b', t_low)
+            has_otp_code = bool(otp_code_pattern)
             
-            if is_warning and "share" in t_low and has_otp_code:
-                # This is a legitimate bank OTP with security warning
-                f_score = min(f_score, 8)
+            # =========================================================================
+            # 2. SAFE-PASS GATE (Priority 1): Check for legitimate automated message
+            # If ("do not share" OR "valid for") AND (6-8 digit code): SAFE
+            # =========================================================================
+            safe_indicators = ["do not share", "never share", "don't share", "valid for", "expires in"]
+            is_safe_indicator = any(ind in t_low for ind in safe_indicators)
+            
+            if is_safe_indicator and has_otp_code:
+                # This is a legitimate OTP with security warning - SAFE PASS
+                f_score = 10
                 intel_dict["riskScore"] = f_score
                 intel_dict["isPhishing"] = False
                 intel_dict["scamType"] = "Safe/Transactional"
                 intel_dict["urgencyLevel"] = "Low"
-                reply = "✅ Safe: Legitimate OTP with security warning"
-                logger.info(f"INTENT GATE: Safe OTP with warning - Score {f_score}")
-            else:
-                # =========================================================================
-                # 2. MALICIOUS OVERRIDES (Only runs if the message ISN'T a safe warning)
-                # =========================================================================
-                if "otp" in t_low and any(w in t_low for w in ["share", "provide", "verify", "executive"]):
-                    f_score = max(f_score, 70)
-                    logger.info(f"INTENT GATE: OTP + data request -> Risk {f_score}")
+                reply = "✅ Safe: Legitimate OTP message with security warning"
+                logger.info(f"SAFE-PASS: Legitimate OTP with warning - Score {f_score}")
+                # RETURN immediately - don't run phishing traps
+                ext_intel = IntelligenceData(**intel_dict)
                 
-                if any(w in t_low for w in ["card details", "cvv", "expiry", "card number"]) and "address" in t_low:
-                    f_score = max(f_score, 80)
-                    logger.info(f"INTENT GATE: Financial data request -> Risk {f_score}")
-                
-                if any(w in t_low for w in ["aadhaar", "pan card", "pan number"]) and any(w in t_low for w in ["kyc", "verify", "update"]):
-                    f_score = max(f_score, 72)
-                    logger.info(f"INTENT GATE: ID Theft KYC request -> Risk {f_score}")
-                
-                # Update intelligence object
-                intel_dict["riskScore"] = f_score
-                if f_score >= 60:
-                    intel_dict["isPhishing"] = True
-                    intel_dict["scamType"] = "Confirmed Phishing/Scam"
-                    intel_dict["urgencyLevel"] = "High"
-                    reply = f"❌ Danger: High risk scam detected (Score: {f_score})"
+                # Build response
+                latency_ms = int((time() - start_time) * 1000)
+                response_data = {
+                    "status": "success",
+                    "reply": reply,
+                    "intelligence": intel_dict,
+                    "version": API_VERSION,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "latency_ms": latency_ms
+                }
+                return HoneypotResponse(**response_data)
+            
+            # =========================================================================
+            # 3. PHISHING TRAPS (Priority 2): Only runs if Safe-Pass was NOT triggered
+            # =========================================================================
+            # Scam: OTP + share/request
+            if "otp" in t_low and any(w in t_low for w in ["share", "provide", "verify", "executive"]):
+                f_score = max(f_score, 70)
+                logger.info(f"PHISHING TRAP: OTP + request -> Risk {f_score}")
+            
+            # Scam: Financial data request
+            if any(w in t_low for w in ["card details", "cvv", "expiry", "card number"]) and "address" in t_low:
+                f_score = max(f_score, 80)
+                logger.info(f"PHISHING TRAP: Financial data request -> Risk {f_score}")
+            
+            # Scam: ID Theft KYC
+            if any(w in t_low for w in ["aadhaar", "pan card", "pan number"]) and any(w in t_low for w in ["kyc", "verify", "update"]):
+                f_score = max(f_score, 72)
+                logger.info(f"PHISHING TRAP: ID Theft KYC request -> Risk {f_score}")
+            
+            # Update intelligence object
+            intel_dict["riskScore"] = f_score
+            if f_score >= 60:
+                intel_dict["isPhishing"] = True
+                intel_dict["scamType"] = "Confirmed Phishing/Scam"
+                intel_dict["urgencyLevel"] = "High"
+                reply = f"❌ Danger: High risk scam detected (Score: {f_score})"
             
         except Exception as e:
-            logger.warning(f"INTENT GATE ERROR: {e}")
+            logger.warning(f"SAFE-PASS GATE ERROR: {e}")
         
         ext_intel = IntelligenceData(**intel_dict)
         
