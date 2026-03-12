@@ -29,8 +29,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# v1.2 Titanium: API Version
-API_VERSION = "1.2.0"
+# v1.3.1 Strict Heuristic Overrides: API Version
+API_VERSION = "1.3.1"
 
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
 from database import db_manager
@@ -211,12 +211,15 @@ GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "")
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 
 # Default intelligence template for consistent API responses
+# v1.3.0: Added aadhaarNumbers and panNumbers
 DEFAULT_INTEL = {
     "bankAccounts": [],
     "upiIds": [],
     "phishingLinks": [],
     "phoneNumbers": [],
     "suspiciousKeywords": [],
+    "aadhaarNumbers": [],
+    "panNumbers": [],
     "agentNotes": "",
     "scamType": "Safe/Transactional",
     "urgencyLevel": "Low",
@@ -327,6 +330,38 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> str:
     return provided_key
 
 
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """
+    Calculate the Levenshtein distance between two strings.
+    Used for typo-squatting detection (brand lookalikes).
+    
+    Args:
+        s1: First string
+        s2: Second string
+    
+    Returns:
+        Edit distance between the two strings
+    """
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    
+    if len(s2) == 0:
+        return len(s1)
+    
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            # Cost of insertions, deletions, or substitutions
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    
+    return previous_row[-1]
+
+
 def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str = "") -> tuple:
     """
     THE FINAL THREE - Ultimate sanitization block before response delivery.
@@ -343,8 +378,11 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
     RULE EXECUTION ORDER:
     ---------------------
     1. Rule 2 (OTP Transactional Safeguard) - Check first to prevent false positives
-    2. Rule 1 (Evidence = High Risk) - Override with physical evidence
-    3. Rule 3 (Master Boolean Sync) - Final consistency check
+    2. Rule 4 (Social Engineering) - Urgent verbal manipulation
+    3. Rule 5 (ID Theft Detection) - Aadhaar/PAN requests
+    4. Rule 6 (Brand Lookalike) - Typo-squatting detection
+    5. Rule 1 (Evidence = High Risk) - Override with physical evidence
+    6. Rule 3 (Master Boolean Sync) - Final consistency check
     
     Args:
         intel: Intelligence dictionary from AI processing
@@ -358,12 +396,27 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
     
     # =========================================================================
     # ZERO NULLS ENFORCEMENT - Ensure all artifact lists are never null
+    # v1.3.0: Added aadhaarNumbers and panNumbers
     # =========================================================================
     intel["phishingLinks"] = intel.get("phishingLinks") or []
     intel["upiIds"] = intel.get("upiIds") or []
     intel["bankAccounts"] = intel.get("bankAccounts") or []
     intel["phoneNumbers"] = intel.get("phoneNumbers") or []
     intel["suspiciousKeywords"] = intel.get("suspiciousKeywords") or []
+    intel["aadhaarNumbers"] = intel.get("aadhaarNumbers") or []
+    intel["panNumbers"] = intel.get("panNumbers") or []
+    
+    # =========================================================================
+    # v1.3.1: PRESERVE WHITELIST HIGH RISK
+    # If the whitelist already detected high risk, preserve it and skip re-analysis
+    # =========================================================================
+    initial_risk = intel.get("riskScore") or 0
+    if initial_risk >= 60:
+        # Whitelist already detected high risk - preserve it
+        logger.info(f"PRESERVING WHITELIST HIGH RISK: {initial_risk}")
+        intel["isPhishing"] = True
+        reply = f"❌ Danger: {intel.get('agentNotes', 'High risk detected')}"
+        return intel, reply
     
     # FLAT LISTS - Ensure extractedEntities is a flat list of strings
     raw_entities = intel.get("extractedEntities", [])
@@ -439,6 +492,234 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
             return intel, reply
     
     # =========================================================================
+    # v1.3.0 RULE 4: Social Engineering (Verbal Manipulation)
+    # Detect urgent verbal commands without links - Base Risk 60
+    # If paired with OTP request, force Risk 100
+    # =========================================================================
+    urgent_commands = [
+        "hurry up", "hurry", "immediately", "urgent", "act now", "limited time",
+        "account will be blocked", "account will be suspended", "account will be closed",
+        "verify immediately", "verification required immediately", "update now",
+        "confirm now", "failure to comply", "legal action", "court", "arrest warrant"
+    ]
+    has_urgent_language = any(cmd in message_lower for cmd in urgent_commands)
+    
+    if has_urgent_language and not has_links_or_upi and not has_otp:
+        # Urgent commands without links or OTP - Base Risk 60
+        intel["riskScore"] = max(intel.get("riskScore", 0), 60)
+        intel["scamType"] = "Social Engineering"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["urgent language"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [Social Engineering: Urgent verbal commands detected]"
+        logger.info(f"SOCIAL ENGINEERING TRIGGERED: Urgent language without links - Risk 60")
+    elif has_urgent_language and has_otp:
+        # Urgent + OTP = CRITICAL - Risk 100
+        intel["riskScore"] = 100
+        intel["isPhishing"] = True
+        intel["scamType"] = "Social Engineering"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["urgent language", "otp"]
+        intel["agentNotes"] = "CRITICAL: Urgent language combined with OTP request - likely scam"
+        reply = "❌ Danger: Social engineering - urgent OTP scam"
+        return intel, reply
+    
+    # =========================================================================
+    # v1.3.0 RULE 5: ID Theft Detection (Aadhaar/PAN)
+    # Detect requests for government ID photos/numbers - Minimum Risk 80
+    # =========================================================================
+    id_theft_keywords = [
+        "aadhaar", "aadhar", "pan card", "pan number", "uidai",
+        "photo id", "id photo", "verify id", "id verification",
+        "document verification", "upload id", "send id", "provide id",
+        "kyc documents", "kyc verification", "identity proof"
+    ]
+    id_photo_keywords = [
+        "photo of", "picture of", "send your", "click photo", "upload photo",
+        "selfie with", "video call", "front photo", "back photo"
+    ]
+    
+    has_id_request = any(kw in message_lower for kw in id_theft_keywords)
+    has_photo_request = any(kw in message_lower for kw in id_photo_keywords)
+    
+    # Check for actual Aadhaar/PAN numbers in message
+    aadhaar_numbers = intel.get("aadhaarNumbers", [])
+    pan_numbers = intel.get("panNumbers", [])
+    has_id_numbers = len(aadhaar_numbers) > 0 or len(pan_numbers) > 0
+    
+    if (has_id_request and has_photo_request) or (has_id_request and has_id_numbers):
+        # Request for ID photo or ID numbers = High Danger
+        intel["riskScore"] = max(intel.get("riskScore", 0), 80)
+        intel["isPhishing"] = True
+        intel["scamType"] = "ID Theft"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["id theft"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [ID Theft: Government ID request detected]"
+        logger.info(f"ID THEFT TRIGGERED: Aadhaar/PAN request detected - Risk 80")
+    elif has_id_request:
+        # General ID request without photo
+        intel["riskScore"] = max(intel.get("riskScore", 0), 60)
+        intel["scamType"] = "ID Theft"
+        intel["urgencyLevel"] = "Medium"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["id request"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [ID Theft: Government ID request detected]"
+    
+    # =========================================================================
+    # v1.3.0 RULE 6: Brand Lookalike (Typo-Squatting)
+    # Detect domains that look like major brands but have typos
+    # =========================================================================
+    # Major brands and their common misspellings/lookalikes
+    brand_patterns = {
+        "sbi": ["sbl", "sbi1", "sbi-update", "sbi-verification", "sbi-bank"],
+        "hdfc": ["hdft", "hdfc1", "hdfc-update", "hdfc-bank", "hdffc"],
+        "icici": ["iccil", "icici1", "icici-update", "icici-bank"],
+        "axis": ["axis1", "axis-update", "axiz", "axls"],
+        "yesbank": ["yes1", "yesbank-update", "yes-bank"],
+        "bank": ["b ank", "bank1", "bank-update"],
+        "paytm": ["paytm1", "paytm-update", "payt m", "pa yt m"],
+        "phonepe": ["phonepe1", "phonepe-update", "phon epe"],
+        "google": ["go0gle", "g00gle", "googie", "gogle"],
+        "amazon": ["amaz0n", "amazom", "amazn", "amajon"],
+        "facebook": ["faceb00k", "facebok", "faceboook"],
+        "instagram": ["1nstagram", "instagran", "1nsta"],
+        "whatsapp": ["whats app", "whatssap", "whatsup"]
+    }
+    
+    def is_lookalike_domain(domain: str) -> tuple[bool, str]:
+        """Check if domain is a lookalike of a major brand."""
+        domain_lower = domain.lower()
+        # Remove common TLDs for comparison
+        for tld in [".com", ".in", ".org", ".net", ".co", ".io"]:
+            if domain_lower.endswith(tld):
+                domain_base = domain_lower[:-len(tld)]
+                break
+        else:
+            domain_base = domain_lower
+        
+        # Check against brand patterns
+        for brand, lookalikes in brand_patterns.items():
+            if brand in domain_base:
+                # Brand is present, check if it's exact or lookalike
+                if domain_base == brand:
+                    return False, ""  # Exact brand, not a lookalike
+                # Check for lookalike patterns
+                for lookalike in lookalikes:
+                    if lookalike in domain_base or levenshtein_distance(brand, domain_base) <= 2:
+                        return True, brand
+        return False, ""
+    
+    # Check each phishing link for lookalike patterns
+    lookalike_links = []
+    for link in phishing_links:
+        is_lookalike, brand = is_lookalike_domain(link)
+        if is_lookalike:
+            lookalike_links.append(f"{link} (lookalike: {brand})")
+    
+    if lookalike_links:
+        # Brand lookalike = Evidence Mandate triggered (Risk 75+)
+        intel["riskScore"] = max(intel.get("riskScore", 0), 75)
+        intel["isPhishing"] = True
+        intel["scamType"] = "Brand Impersonation"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["brand lookalike"]
+        intel["phishingLinks"] = list(set(intel.get("phishingLinks", []) + lookalike_links))
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [Brand Lookalike: Typo-squatting detected]"
+        logger.info(f"BRAND LOOKALIKE TRIGGERED: {lookalike_links} - Risk 75")
+    
+    # =========================================================================
+    # v1.3.1 STRICT HEURISTIC OVERRIDES - Final Safety Gate
+    # These rules fire AFTER AI returns to ensure non-negotiable thresholds
+    # =========================================================================
+    
+    # Ensure we have a valid riskScore (handle None cases)
+    current_risk = intel.get("riskScore") or 0
+    
+    # -------------------------------------------------------------------------
+    # RULE 7: OTP Data Request Override
+    # OTP + 'share'/'verify'/'provide'/'executive' → Risk 60+
+    # Must return early to bypass whitelist bypass
+    # -------------------------------------------------------------------------
+    otp_trigger_keywords = ["share", "verify", "provide", "executive", "send", "give"]
+    has_otp_data_request = has_otp and any(kw in message_lower for kw in otp_trigger_keywords)
+    
+    if has_otp_data_request:
+        intel["riskScore"] = max(current_risk, 60)
+        intel["isPhishing"] = True
+        intel["scamType"] = "Social Engineering"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["otp data request"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [Override: OTP Data Request - Risk 60]"
+        logger.info(f"OVERRIDE OTP DATA REQUEST: Risk forced to 60+")
+        reply = "❌ Danger: OTP data request scam detected"
+        return intel, reply
+    
+    # -------------------------------------------------------------------------
+    # RULE 8: Financial Data Request Override
+    # Card Details + Address (or CVV/Expiry) → Risk 75+
+    # -------------------------------------------------------------------------
+    financial_card_keywords = ["card details", "credit card", "debit card", "card number"]
+    financial_cvv_keywords = ["cvv", "expiry", "expiration", "valid till", "mm/yy", "yy/mm"]
+    financial_address_keywords = ["address", "billing address", "registered address"]
+    
+    has_card_request = any(kw in message_lower for kw in financial_card_keywords)
+    has_cvv_expiry = any(kw in message_lower for kw in financial_cvv_keywords)
+    has_address_request = any(kw in message_lower for kw in financial_address_keywords)
+    
+    if has_card_request and (has_cvv_expiry or has_address_request):
+        intel["riskScore"] = max(current_risk, 75)
+        intel["isPhishing"] = True
+        intel["scamType"] = "Financial Fraud"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["financial data request"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [Override: Financial Data Request - Risk 75]"
+        logger.info(f"OVERRIDE FINANCIAL DATA REQUEST: Risk forced to 75+")
+    
+    # -------------------------------------------------------------------------
+    # RULE 9: ID Theft KYC Override
+    # Aadhaar/PAN + KYC/Verification → Risk 65-75
+    # -------------------------------------------------------------------------
+    kyc_verification_keywords = ["kyc", "verification", "verify your", "identity verification", "document verification"]
+    has_kyc_request = any(kw in message_lower for kw in kyc_verification_keywords)
+    
+    # Check for Aadhaar/PAN mentions (case-insensitive)
+    has_aadhaar_mention = "aadhaar" in message_lower or "aadhar" in message_lower
+    has_pan_mention = "pan" in message_lower
+    
+    if (has_aadhaar_mention or has_pan_mention) and has_kyc_request:
+        # Force to 65-75 range (not lower than 65, not higher than 75 unless already higher)
+        intel["riskScore"] = max(current_risk, 65)
+        intel["riskScore"] = min(intel["riskScore"], 75)  # Cap at 75 for this specific override
+        intel["isPhishing"] = True
+        intel["scamType"] = "ID Theft"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["id theft kyc"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [Override: ID Theft KYC Request - Risk 65-75]"
+        logger.info(f"OVERRIDE ID THEFT KYC: Risk forced to 65-75")
+    
+    # -------------------------------------------------------------------------
+    # RULE 10: Urgency Multiplier
+    # 'Electricity', 'Cut', 'Blocked', 'Hold' + phone/link → +20 Risk
+    # -------------------------------------------------------------------------
+    urgency_multiplier_keywords = ["electricity", "electric", "power cut", "power supply", "disconnected"]
+    urgency_action_keywords = ["cut", "blocked", "hold", "suspend", "disconnect"]
+    
+    has_urgency_topic = any(kw in message_lower for kw in urgency_multiplier_keywords)
+    has_urgency_action = any(kw in message_lower for kw in urgency_action_keywords)
+    has_phone_or_link = len(phone_numbers) > 0 or len(phishing_links) > 0
+    
+    if has_urgency_topic and has_urgency_action and has_phone_or_link:
+        # Add +20 to current risk
+        intel["riskScore"] = current_risk + 20
+        intel["isPhishing"] = True
+        intel["scamType"] = "Urgency Scam"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["urgency multiplier"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [Override: Urgency Multiplier +20]"
+        logger.info(f"OVERRIDE URGENCY MULTIPLIER: +20 Risk added")
+    
+    # Update current_risk after all overrides
+    current_risk = intel.get("riskScore", 0) or 0
+    
+    # =========================================================================
     # v1.2 Titanium RULE 1: Evidence Mandate
     # Trigger: phishingLinks OR upiIds are NOT empty (bank_accounts excluded)
     # If triggered: isPhishing=True, riskScore >= 70
@@ -458,7 +739,7 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
         artifact_str = ", ".join(artifacts) if artifacts else "Unknown"
         
         # v1.2: FORCE high-risk values (riskScore >= 70)
-        intel["riskScore"] = max(risk_score, 70)
+        intel["riskScore"] = max(current_risk, 70)
         intel["isPhishing"] = True
         intel["scamType"] = "Confirmed Phishing/Scam"
         intel["urgencyLevel"] = "High"
@@ -467,19 +748,20 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
         return intel, reply
     
     # =========================================================================
-    # RULE 3: Master Boolean Sync
+    # RULE 3: Master Boolean Sync (REFINED for v1.3.1)
     # Logic: riskScore < 30 → isPhishing=False, riskScore >= 30 → isPhishing=True
+    # Note: All heuristic overrides already set isPhishing=True when Risk >= 60
     # =========================================================================
-    if risk_score < 30:
+    if current_risk < 30:
         intel["isPhishing"] = False
     else:
         intel["isPhishing"] = True
     
     # Build headline reply based on risk category
-    if 0 <= risk_score <= 10:
+    if 0 <= current_risk <= 10:
         prefix = "✅ Safe:"
         category = "Safe/Transactional"
-    elif 11 <= risk_score <= 50:
+    elif 11 <= current_risk <= 50:
         prefix = "⚠️ Warning:"
         category = "Suspicious/Unverified"
     else:  # 51-100
@@ -617,6 +899,8 @@ async def handle_message(
             "phishingLinks": [],
             "phoneNumbers": [],
             "suspiciousKeywords": [],
+            "aadhaarNumbers": [],
+            "panNumbers": [],
             "agentNotes": "Input too short for analysis",
             "scamType": "Safe/Transactional",
             "urgencyLevel": "Low",
@@ -796,12 +1080,15 @@ async def handle_message(
         
         # Build clean intel dict for logging and response
         # Deduplicate UPIs and links (Fix 3: Entity Deduplication)
+        # v1.3.0: Added aadhaarNumbers and panNumbers
         intel_dict = {
             "bankAccounts": ensure_list(intel.get("bankAccounts", [])),
             "upiIds": list(set(ensure_list(intel.get("upiIds", [])))),
             "phishingLinks": list(set(ensure_list(intel.get("phishingLinks", [])))),
             "phoneNumbers": ensure_list(intel.get("phoneNumbers", [])),
             "suspiciousKeywords": ensure_list(intel.get("suspiciousKeywords", [])),
+            "aadhaarNumbers": ensure_list(intel.get("aadhaarNumbers", [])),
+            "panNumbers": ensure_list(intel.get("panNumbers", [])),
             "agentNotes": intel.get("agentNotes", ""),
             "scamType": intel.get("scamType", "Unknown"),
             "urgencyLevel": intel.get("urgencyLevel", "Low"),

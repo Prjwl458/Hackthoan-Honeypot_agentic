@@ -388,12 +388,20 @@ class ScamAgent:
         bank_pattern = r'\b\d{9,18}\b'
         phone_pattern = r'\b(?:\+?\d{1,3}[- ]?)?\(?\d{3}\)?[- ]?\d{3}[- ]?\d{4}\b'
         
+        # v1.3.0: ID Theft Detection - Aadhaar (12-digit patterns)
+        aadhaar_pattern = r'\b\d{4}[- ]?\d{4}[- ]?\d{4}\b'
+        # v1.3.0: ID Theft Detection - PAN (5 letters, 4 digits, 1 letter: ABCDE1234F)
+        pan_pattern = r'\b[A-Z]{5}[0-9]{4}[A-Z]\b'
+        
         # Initialize intelligence dictionary
+        # v1.3.0: Added aadhaarNumbers and panNumbers for ID theft detection
         intel = {
             "bankAccounts": list(set(re.findall(bank_pattern, full_text))),
             "upiIds": list(set(re.findall(upi_pattern, full_text))),
             "phishingLinks": list(set(re.findall(url_pattern, full_text))),
             "phoneNumbers": list(set(re.findall(phone_pattern, full_text))),
+            "aadhaarNumbers": list(set(re.findall(aadhaar_pattern, full_text))),
+            "panNumbers": list(set(re.findall(pan_pattern, full_text))),
             "suspiciousKeywords": [],
             "agentNotes": "",
             # New enhanced fields
@@ -429,6 +437,17 @@ class ScamAgent:
         - Risk 11-50: Reply prefixed with "⚠️ Warning:"
         - Risk 51-100: Reply prefixed with "❌ Danger:"
         
+        RULE 4 - SOCIAL ENGINEERING (v1.3.0):
+        - Urgent commands (hurry, immediately, account blocked) WITHOUT links → riskScore = 60
+        - Urgent + OTP request → riskScore = 100 (CRITICAL)
+        
+        RULE 5 - ID THEFT DETECTION (v1.3.0):
+        - Requests for Aadhaar/PAN photo or numbers → riskScore = 80 (ID Theft)
+        - Any government ID request → minimum riskScore = 60
+        
+        RULE 6 - BRAND LOOKALIKE (v1.3.0):
+        - Typo-squatting domains (sbi→sbl, amazon→amaz0n) → riskScore = 75
+        
         ===================================================================
         ANALYSIS GUIDELINES:
         ===================================================================
@@ -441,20 +460,20 @@ class ScamAgent:
         {sender_check}
         
         Your tasks:
-        1. Extract entities: UPI IDs, phone numbers, links, bank accounts
+        1. Extract entities: UPI IDs, phone numbers, links, bank accounts, Aadhaar numbers (12-digit), PAN (5 letters + 4 digits + 1 letter)
         2. Identify request type: informational, transactional, or malicious
-        3. Classify: Safe/Transactional, Bank Update, Phishing, Lottery, Tech Support, Investment, Romance, Other
+        3. Classify: Safe/Transactional, Bank Update, Phishing, Lottery, Tech Support, Investment, Romance, ID Theft, Brand Impersonation, Other
         4. Assess Urgency: Low (informational), Medium (needs attention), High (immediate action required)
         5. Risk Score (will be validated by above rules):
            - 1-20: Safe/Transactional (bank alerts, OTPs you expect)
            - 21-40: Low Risk (promotional content)
-           - 41-60: Medium Risk (urgency but no payment links)
-           - 61-80: High Risk (payment links, PII requests)
+           - 41-60: Medium Risk (urgency but no payment links, ID requests)
+           - 61-80: High Risk (payment links, PII theft attempts)
            - 81-100: Critical (active fraud in progress)
         
         Return ONLY a raw JSON object with these exact keys: 
         bankAccounts, upiIds, phishingLinks, phoneNumbers, suspiciousKeywords,
-        agentNotes, scamType, urgencyLevel, riskScore, extractedEntities
+        aadhaarNumbers, panNumbers, agentNotes, scamType, urgencyLevel, riskScore, extractedEntities
         
         DO NOT include any explanation or markdown formatting.
         """
@@ -478,7 +497,7 @@ class ScamAgent:
                 
                 # Merge with regex results
                 if isinstance(llm_intel, dict):
-                    for key in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers", "suspiciousKeywords"]:
+                    for key in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers", "suspiciousKeywords", "aadhaarNumbers", "panNumbers"]:
                         if key in llm_intel:
                             existing = set(intel.get(key, []))
                             new_items = set(llm_intel.get(key, []))
@@ -508,7 +527,7 @@ class ScamAgent:
                 intel["agentNotes"] = "Manual extraction used due to API error or malformed LLM response."
         
         # Ensure all required keys are present
-        for key in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers", "suspiciousKeywords"]:
+        for key in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers", "suspiciousKeywords", "aadhaarNumbers", "panNumbers"]:
             if key not in intel:
                 intel[key] = []
         if "agentNotes" not in intel or not intel["agentNotes"]:

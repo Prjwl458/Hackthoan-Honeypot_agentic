@@ -128,6 +128,9 @@ class IntelligenceData(BaseModel):
     phishingLinks: List[str] = Field(default_factory=list)
     phoneNumbers: List[str] = Field(default_factory=list)
     suspiciousKeywords: List[str] = Field(default_factory=list)
+    # v1.3.0: Added for ID Theft Detection
+    aadhaarNumbers: List[str] = Field(default_factory=list)
+    panNumbers: List[str] = Field(default_factory=list)
     agentNotes: str = ""
     # Enhanced fields with explicit defaults
     scamType: str = "Unknown"
