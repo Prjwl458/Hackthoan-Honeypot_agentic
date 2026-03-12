@@ -704,6 +704,7 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
     
     has_urgency_topic = any(kw in message_lower for kw in urgency_multiplier_keywords)
     has_urgency_action = any(kw in message_lower for kw in urgency_action_keywords)
+    phone_numbers = intel.get("phoneNumbers", [])
     has_phone_or_link = len(phone_numbers) > 0 or len(phishing_links) > 0
     
     if has_urgency_topic and has_urgency_action and has_phone_or_link:
@@ -1100,6 +1101,41 @@ async def handle_message(
         intel_dict, reply = finalize_intelligence(intel_dict, reply, message_text)
         
         logger.info(f"FINAL INTEL OBJECT: {intel_dict}")
+        
+        # =========================================================================
+        # v1.3.1 DETERMINISTIC OVERRIDES - FINAL SAFETY GATE
+        # Crash-proof overrides applied right before response
+        # =========================================================================
+        try:
+            # Normalize text for check
+            raw_text = message_text.lower() if message_text else ""
+            
+            # Get current score safely
+            current_score = intel_dict.get("riskScore", 0) or 0
+            
+            # Hard Overrides
+            if "otp" in raw_text and any(w in raw_text for w in ["share", "verify", "provide", "executive", "agent"]):
+                current_score = max(current_score, 65)
+                logger.info(f"OVERRIDE: OTP + data request -> Risk {current_score}")
+            
+            if any(w in raw_text for w in ["card details", "cvv", "expiry", "card number"]) and "address" in raw_text:
+                current_score = max(current_score, 80)
+                logger.info(f"OVERRIDE: Financial data request -> Risk {current_score}")
+            
+            if any(w in raw_text for w in ["aadhaar", "pan card", "pan number"]) and any(w in raw_text for w in ["kyc", "verify", "update"]):
+                current_score = max(current_score, 72)
+                logger.info(f"OVERRIDE: ID Theft KYC request -> Risk {current_score}")
+            
+            # Update intelligence object
+            intel_dict["riskScore"] = current_score
+            if current_score >= 60:
+                intel_dict["isPhishing"] = True
+                intel_dict["scamType"] = "Confirmed Phishing/Scam"
+                intel_dict["urgencyLevel"] = "High"
+                reply = f"❌ Danger: High risk scam detected (Score: {current_score})"
+            
+        except Exception as e:
+            logger.warning(f"CRITICAL OVERRIDE ERROR: {e}")
         
         ext_intel = IntelligenceData(**intel_dict)
         
