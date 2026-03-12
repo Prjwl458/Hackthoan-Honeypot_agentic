@@ -29,8 +29,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# v1.3.2 Safe-Pass Gate: API Version
-API_VERSION = "1.3.2"
+# v1.3.3 Final Hardening: PIN Trap & Government Shield
+API_VERSION = "1.3.3"
 
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
 from database import db_manager
@@ -719,6 +719,52 @@ def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str =
     
     # Update current_risk after all overrides
     current_risk = intel.get("riskScore", 0) or 0
+    
+    # =========================================================================
+    # v1.3.3 HARDENING: PIN/Credential Trap (Highest Priority Override)
+    # If message contains PIN/password keywords, this is ALWAYS a scam
+    # PIN requests are never legitimate - override almost everything
+    # =========================================================================
+    pin_trap_keywords = ["upi pin", "upi password", "secret pin"]
+    has_pin_request = any(kw in message_lower for kw in pin_trap_keywords)
+    
+    if has_pin_request:
+        intel["riskScore"] = 95
+        intel["isPhishing"] = True
+        intel["scamType"] = "Credential Theft"
+        intel["urgencyLevel"] = "High"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["pin trap"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [OVERRIDE: PIN/Credential Trap - Risk 95]"
+        logger.info(f"OVERRIDE PIN TRAP: PIN/Credential request detected - Risk forced to 95")
+        reply = "❌ Danger: PIN/Credential theft attempt detected"
+        return intel, reply
+    
+    # =========================================================================
+    # v1.3.3 HARDENING: Government Confirmation Shield
+    # If message contains UIDAI confirmation keywords, mark as SAFE
+    # BUT: Don't apply if suspicious URL present (like .in/verify-now)
+    # =========================================================================
+    government_shield_keywords = ["successfully linked", "as per uidai records", "uidai"]
+    has_government_shield = any(kw in message_lower for kw in government_shield_keywords)
+    
+    # Check for suspicious URLs that should block the shield
+    suspicious_url_patterns = [".in/verify", ".in/verify-now", ".in/confirm", "/verify-", "verify-now", "verify-now.in"]
+    has_suspicious_url = any(pattern in message_lower for pattern in suspicious_url_patterns)
+    
+    if has_government_shield and not has_suspicious_url:
+        # Apply the government shield - mark as safe
+        intel["riskScore"] = 12
+        intel["isPhishing"] = False
+        intel["scamType"] = "Safe/Transactional"
+        intel["urgencyLevel"] = "Low"
+        intel["suspiciousKeywords"] = intel.get("suspiciousKeywords", []) + ["government confirmation"]
+        intel["agentNotes"] = f"{intel.get('agentNotes', '')} [SHIELD: Government confirmation detected - Risk 12]"
+        logger.info(f"SHIELD GOVERNMENT CONFIRMATION: UIDAI confirmation detected - Risk 12")
+        reply = "✅ Safe: Government confirmation (UIDAI)"
+        return intel, reply
+    elif has_government_shield and has_suspicious_url:
+        # Government keywords present BUT also suspicious URL - treat as high risk
+        logger.info(f"GOVERNMENT SHIELD BLOCKED: UIDAI keywords present with suspicious URL")
     
     # =========================================================================
     # v1.2 Titanium RULE 1: Evidence Mandate
