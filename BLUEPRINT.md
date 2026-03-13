@@ -1,12 +1,12 @@
 # 🏗️ Agentic AI Honeypot - Technical Blueprint
 
-**Version 1.2.0 Titanium** | Production Architecture Document
+**Version 2.1.0** | Production Architecture Document
 
 ---
 
 ## 1. Executive Summary
 
-The Agentic AI Honeypot is a hardened FastAPI application designed for real-time scam detection. Version 1.2.0 Titanium introduces enterprise-grade security patterns including constant-time cryptographic comparison, deterministic rule-based logic, and comprehensive telemetry.
+The Agentic AI Honeypot is a hardened FastAPI application designed for real-time scam detection. Version 2.1.0 introduces enterprise-grade security patterns including constant-time cryptographic comparison, deterministic rule-based logic, and comprehensive telemetry.
 
 **Key Engineering Decisions:**
 - **Defense in Depth:** Five architectural pillars provide overlapping security guarantees
@@ -16,7 +16,69 @@ The Agentic AI Honeypot is a hardened FastAPI application designed for real-time
 
 ---
 
-## 2. The Five Architectural Pillars
+## 2. Tiered Defense System
+
+The v2.1.0 release implements a three-tier defense system optimized for both accuracy and cost-efficiency. Messages flow through tiers sequentially, with early returns when patterns match.
+
+### Tier 1: Whitelists (Safe Traffic)
+
+**Purpose:** Immediate safe classification for known legitimate patterns, bypassing expensive AI processing.
+
+| Rule | Trigger Pattern | Risk Score | isPhishing |
+|------|----------------|------------|------------|
+| Official OTPs | 6-digit code + ("do not share" OR "valid for" OR "expires in") | 5% | False |
+| Government Confirmations | ("successfully linked" OR "successfully updated") + (UIDAI/Aadhaar) | 12% | False |
+| Trusted Root Domains | Exact root domain match (jio.com, amazon.in, google.com) - **15% cap** | ≤15% | False |
+
+**Exception:** If PIN/OTP/password keywords detected, Trusted Root Domains rule is bypassed.
+
+**Performance:** < 5ms response time, zero API costs.
+
+### Tier 2: Blacklists (Known Scams)
+
+**Purpose:** Immediate high-risk classification for known scam patterns with deterministic confidence.
+
+| Trap Name | Trigger Pattern | Risk Score | isPhishing |
+|-----------|----------------|------------|------------|
+| UPI PIN/Password Trap | "UPI PIN" OR "UPI Password" OR "secret pin" | 98% | True |
+| Micro-Payment Scam | ("send 1" OR "pay ₹1") + ("verify" OR "reward" OR "claim") | 92% | True |
+| Identity Theft | (Aadhaar/PAN) + ("share" OR "verify" OR "confirm") | 85% | True |
+
+**Performance:** < 5ms response time, zero API costs.
+
+### Tier 3: AI Heuristics (Edge Cases)
+
+**Purpose:** Semantic analysis for messages that don't match Tier 1 or Tier 2 patterns.
+
+**Activation Criteria:**
+- Message length ≥ 10 characters
+- Not a simple greeting/acknowledgment ("ok", "thanks", "yes", "no")
+- No Tier 1 whitelist match
+- No Tier 2 blacklist match
+
+**Fallback Rules (Final Gatekeeper):**
+- Evidence Mandate: Links/UPIs present → riskScore ≥ 75
+- OTP Safeguard: Clean OTP (no forwarding) → riskScore = 5
+- Boolean Sync: isPhishing = (riskScore ≥ 70)
+
+**Execution Flow:**
+```
+┌─────────────────────────────────────────────────────────┐
+│  INCOMING MESSAGE                                       │
+├─────────────────────────────────────────────────────────┤
+│  1. Check Tier 1 (Whitelist) → Match? → RETURN SAFE   │
+├─────────────────────────────────────────────────────────┤
+│  2. Check Tier 2 (Blacklist) → Match? → RETURN DANGER  │
+├─────────────────────────────────────────────────────────┤
+│  3. Tier 3: AI Heuristics → Semantic Analysis          │
+├─────────────────────────────────────────────────────────┤
+│  4. Final Gatekeeper Rules → Final Response            │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. The Five Architectural Pillars
 
 ### Pillar 1: The Armor (Security)
 
@@ -175,7 +237,7 @@ GET /health
 Response:
 {
     "status": "online",
-    "version": "1.2.0",
+    "version": "2.1.0",
     "timestamp": "2024-01-15T10:30:00.000000"
 }
 ```
@@ -236,7 +298,7 @@ if len(message_text) < 3:
     "extractedEntities": [],
     "threatSource": ""
   },
-  "version": "1.2.0",
+  "version": "2.1.0",
   "timestamp": "2024-01-15T10:30:00.000000",
   "latency_ms": 2
 }
@@ -275,7 +337,7 @@ All responses include root-level telemetry:
   "status": "success",
   "reply": "...",
   "intelligence": {...},
-  "version": "1.2.0",
+  "version": "2.1.0",
   "timestamp": "2024-01-15T10:30:00.000000",
   "latency_ms": 245
 }
@@ -517,7 +579,7 @@ intel["extractedEntities"] = flatten_to_strings(raw_entities)
     "suspiciousKeywords": ["verify", "account"],
     "extractedEntities": ["evil.com"]
   },
-  "version": "1.2.0",
+  "version": "2.1.0",
   "timestamp": "2024-01-15T10:30:00.000000",
   "latency_ms": 245
 }
@@ -574,7 +636,7 @@ intel["extractedEntities"] = flatten_to_strings(raw_entities)
   "error": "Gateway Timeout",
   "message": "AI analysis timed out after 15 seconds",
   "latency_ms": 15000,
-  "version": "1.2.0",
+  "version": "2.1.0",
   "timestamp": "2024-01-15T10:30:15.000000"
 }
 ```
@@ -651,6 +713,6 @@ done
 
 ---
 
-**Document Version:** 1.2.0 Titanium  
+**Document Version:** 2.1.0  
 **Last Updated:** 2024-01-15  
 **Author:** Prajwal

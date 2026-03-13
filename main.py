@@ -3,7 +3,7 @@ load_dotenv()
 
 """
 FastAPI application entry point for Agentic AI Honeypot.
-v2.0.0 Production Stable - Tiered Defense System with deterministic early returns.
+v2.1.0 Production Stable - Tiered Defense System with deterministic early returns.
 
 Tier Structure:
 - Tier 1: Sovereign Shields (Whitelists) - Early Return for legitimate messages
@@ -33,7 +33,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-API_VERSION = "2.0.0"
+API_VERSION = "2.1.0"
 
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
 from database import db_manager
@@ -189,8 +189,8 @@ app.add_middleware(
 )
 
 # Configuration from environment
-# Fallback to default key for development if not set
-EXPECTED_KEY = os.getenv("API_KEY", "prajwal_hackathon_key_2310")
+# API_KEY must be set in environment variables
+EXPECTED_KEY = os.getenv("API_KEY", "")
 GUVI_CALLBACK_URL = os.getenv("GUVI_CALLBACK_URL", "")
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 
@@ -346,7 +346,7 @@ def levenshtein_distance(s1: str, s2: str) -> int:
 
 
 # =============================================================================
-# TIERED DEFENSE SYSTEM v2.0.0
+# TIERED DEFENSE SYSTEM v2.1.0
 # =============================================================================
 
 def check_tier1_sovereign_shields(message_text: str) -> Optional[Dict[str, Any]]:
@@ -1467,7 +1467,7 @@ async def handle_message(
             t_low = message_text.lower() if message_text else ""
             
             # Get current score safely
-            f_score = intel_dict.get("riskScore", 0) or 0
+            risk_score = intel_dict.get("riskScore", 0) or 0
             
             # =========================================================================
             # 1. REGEX FOR NUMERIC OTP: Check for 6-8 digit code
@@ -1485,13 +1485,13 @@ async def handle_message(
             
             if is_safe_indicator and has_otp_code:
                 # This is a legitimate OTP with security warning - SAFE PASS
-                f_score = 10
-                intel_dict["riskScore"] = f_score
+                risk_score = 10
+                intel_dict["riskScore"] = risk_score
                 intel_dict["isPhishing"] = False
                 intel_dict["scamType"] = "Safe/Transactional"
                 intel_dict["urgencyLevel"] = "Low"
                 reply = "✅ Safe: Legitimate OTP message with security warning"
-                logger.info(f"SAFE-PASS: Legitimate OTP with warning - Score {f_score}")
+                logger.info(f"SAFE-PASS: Legitimate OTP with warning - Score {risk_score}")
                 # RETURN immediately - don't run phishing traps
                 ext_intel = IntelligenceData(**intel_dict)
                 
@@ -1512,26 +1512,26 @@ async def handle_message(
             # =========================================================================
             # Scam: OTP + share/request
             if "otp" in t_low and any(w in t_low for w in ["share", "provide", "verify", "executive"]):
-                f_score = max(f_score, 70)
-                logger.info(f"PHISHING TRAP: OTP + request -> Risk {f_score}")
+                risk_score = max(risk_score, 70)
+                logger.info(f"PHISHING TRAP: OTP + request -> Risk {risk_score}")
             
             # Scam: Financial data request
             if any(w in t_low for w in ["card details", "cvv", "expiry", "card number"]) and "address" in t_low:
-                f_score = max(f_score, 80)
-                logger.info(f"PHISHING TRAP: Financial data request -> Risk {f_score}")
+                risk_score = max(risk_score, 80)
+                logger.info(f"PHISHING TRAP: Financial data request -> Risk {risk_score}")
             
             # Scam: ID Theft KYC
             if any(w in t_low for w in ["aadhaar", "pan card", "pan number"]) and any(w in t_low for w in ["kyc", "verify", "update"]):
-                f_score = max(f_score, 72)
-                logger.info(f"PHISHING TRAP: ID Theft KYC request -> Risk {f_score}")
+                risk_score = max(risk_score, 72)
+                logger.info(f"PHISHING TRAP: ID Theft KYC request -> Risk {risk_score}")
             
             # Update intelligence object
-            intel_dict["riskScore"] = f_score
-            if f_score >= 60:
+            intel_dict["riskScore"] = risk_score
+            if risk_score >= 60:
                 intel_dict["isPhishing"] = True
                 intel_dict["scamType"] = "Confirmed Phishing/Scam"
                 intel_dict["urgencyLevel"] = "High"
-                reply = f"❌ Danger: High risk scam detected (Score: {f_score})"
+                reply = f"❌ Danger: High risk scam detected (Score: {risk_score})"
             
         except Exception as e:
             logger.warning(f"SAFE-PASS GATE ERROR: {e}")
