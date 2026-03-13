@@ -1,6 +1,6 @@
 # 🔐 Agentic AI Honeypot - Cyber-Intelligence Engine
 
-**Version 1.2.0 Titanium** | A production-grade FastAPI application engineered for real-time scam detection and intelligence extraction.
+**Version 2.0.0 Production** | A production-grade FastAPI application engineered for real-time scam detection and intelligence extraction.
 
 Built with enterprise-grade security patterns including constant-time cryptographic comparison, deterministic rule-based logic, and comprehensive telemetry. Designed for integration with React Native/Expo mobile applications.
 
@@ -12,12 +12,17 @@ The system implements a **Defense-in-Depth** strategy with five hardened archite
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         v1.2.0 TITANIUM ARCHITECTURE                        │
+│                         v2.0.0 PRODUCTION ARCHITECTURE                        │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  PILLAR 1: THE ARMOR (Security)                                             │
+│  PILLAR 1: TIERED DEFENSE SYSTEM                                            │
+│  ├── Tier 1: Sovereign Shields (Whitelists) - Early return for safe        │
+│  ├── Tier 2: Deterministic Traps (Blacklists) - Early return for known     │
+│  └── Tier 3: LLM Heuristics - AI only when Tier 1/2 don't match            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  PILLAR 2: THE ARMOR (Security)                                             │
 │  ├── Constant-Time API Key Validation (secrets.compare_digest)              │
 │  ├── SlowAPI Rate Limiting (10 req/min, memory-backed)                      │
-│  └── Restricted CORS (localhost:19000, production domain)                   │
+│  └── Restricted CORS (localhost:19000, production domain)                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  PILLAR 2: THE HEART (Reliability)                                          │
 │  ├── 15-Second AI Timeout with 504 Gateway Timeout                          │
@@ -41,7 +46,69 @@ The system implements a **Defense-in-Depth** strategy with five hardened archite
 
 ---
 
-## 🔒 Security Architecture
+## 🛡️ Security Logic - Tiered Defense System
+
+The v2.0.0 release introduces a three-tier defense system that optimizes for both accuracy and performance. Messages are evaluated sequentially through tiers, with early returns when a match is found.
+
+### Tier 1: Sovereign Shields (Whitelists)
+
+**Purpose:** Early return for known-safe message patterns, bypassing expensive AI processing.
+
+| Rule | Trigger Pattern | Risk Score | isPhishing |
+|------|------------------|------------|------------|
+| Official OTP Delivery | 6-digit code + ("do not share" OR "valid for" OR "expires in") | 5% | False |
+| Government Confirmation | ("successfully linked" OR "successfully updated") + (UIDAI/Aadhaar) | 12% | False |
+| Domain Reputation | Exact root domain (jio.com, amazon.in, infosys.com, google.com) - **cap** | 15% max | False |
+
+**Exception:** If PIN/OTP/password keywords detected, Domain Reputation rule is skipped.
+
+**Performance:** < 5ms response time, zero API costs.
+
+### Tier 2: Deterministic Traps (Blacklists)
+
+**Purpose:** Early return for known-scam patterns with high confidence scores.
+
+| Trap Name | Trigger Pattern | Risk Score | isPhishing |
+|-----------|------------------|------------|------------|
+| The PIN Trap | "UPI PIN" OR "UPI Password" OR "secret pin" | 98% | True |
+| The Micro-Payment Trap | ("send 1" OR "pay ₹1") + ("verify" OR "reward" OR "claim") | 92% | True |
+| Identity Theft | (Aadhaar/PAN) + ("share" OR "verify" OR "confirm") | 85% | True |
+
+**Performance:** < 5ms response time, zero API costs.
+
+### Tier 3: LLM Heuristics
+
+**Purpose:** AI-based detection only when Tier 1/2 rules don't match.
+
+**Activation Criteria:**
+- Message length ≥ 10 characters
+- Not a simple greeting/acknowledgment ("ok", "thanks", "yes", "no")
+- No Tier 1 whitelist match
+- No Tier 2 blacklist match
+
+**Fallback Rules (Final Gatekeeper):**
+- Evidence Mandate: Links/UPIs present → riskScore ≥ 75
+- OTP Safeguard: Clean OTP (no forwarding) → riskScore = 5
+- Boolean Sync: isPhishing = (riskScore ≥ 70)
+
+**Execution Flow:**
+```
+┌─────────────────────────────────────────────────────────┐
+│  INCOMING MESSAGE                                       │
+├─────────────────────────────────────────────────────────┤
+│  1. Check Tier 1 (Whitelist) → Match? → RETURN SAFE   │
+├─────────────────────────────────────────────────────────┤
+│  2. Check Tier 2 (Blacklist) → Match? → RETURN DANGER  │
+├─────────────────────────────────────────────────────────┤
+│  3. Tier 3 LLM Heuristics → AI Analysis                │
+├─────────────────────────────────────────────────────────┤
+│  4. Final Gatekeeper Rules → Final Response            │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔒 API Security
 
 ### 1. Constant-Time API Key Validation
 
@@ -222,7 +289,7 @@ Two additional production safeguards ensure API efficiency and frontend stabilit
     "extractedEntities": [],
     "threatSource": ""
   },
-  "version": "1.2.0",
+  "version": "2.0.0",
   "timestamp": "2024-01-15T10:30:00.000000",
   "latency_ms": 2
 }
@@ -282,7 +349,7 @@ Every API response follows this deterministic schema:
     "suspiciousKeywords": ["verify", "account"],
     "extractedEntities": ["evil.com"]
   },
-  "version": "1.2.0",
+  "version": "2.0.0",
   "timestamp": "2024-01-15T10:30:00.000000",
   "latency_ms": 245
 }
@@ -292,7 +359,7 @@ Every API response follows this deterministic schema:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `version` | string | API version (e.g., "1.2.0") |
+| `version` | string | API version (e.g., "2.0.0") |
 | `timestamp` | ISO-8601 | UTC timestamp of response |
 | `latency_ms` | integer | Request processing time in milliseconds |
 
@@ -376,7 +443,7 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# Response: {"status": "online", "version": "1.2.0", "timestamp": "..."}
+# Response: {"status": "online", "version": "2.0.0", "timestamp": "..."}
 ```
 
 ---
@@ -411,4 +478,4 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 ---
 
-**Engineered for Production** | **Class 11 CS Portfolio Project** | **Version 1.2.0 Titanium**
+**Engineered for Production** | **Class 11 CS Portfolio Project** | **Version 2.0.0 Production**

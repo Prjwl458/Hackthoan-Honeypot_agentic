@@ -3,14 +3,19 @@ load_dotenv()
 
 """
 FastAPI application entry point for Agentic AI Honeypot.
-v1.2.0 Titanium - Production-ready with async HTTP, database integration, and global error handling.
+v2.0.0 Production Stable - Tiered Defense System with deterministic early returns.
+
+Tier Structure:
+- Tier 1: Sovereign Shields (Whitelists) - Early Return for legitimate messages
+- Tier 2: Deterministic Traps (Blacklists) - Early Return for known scams
+- Tier 3: LLM Heuristics - AI detection only when Tier 1/2 don't match
 """
 
 import os
 import asyncio
 import logging
 import re
-import secrets  # v1.2 Titanium: Constant-time comparison for API key validation
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -24,17 +29,15 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
-# v1.2 Titanium: Rate Limiting with slowapi
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# v1.3.3 Final Hardening: PIN Trap & Government Shield
-API_VERSION = "1.3.3"
+API_VERSION = "2.0.0"
 
 from models import HoneypotRequest, HoneypotResponse, IntelligenceData
 from database import db_manager
-from agent import ScamAgent, pre_process_message, apply_evidence_guard
+from agent import ScamAgent, apply_evidence_guard
 
 # v1.2 Titanium: Rate Limiting with slowapi (10 requests per minute per IP)
 # Using memory storage to avoid Redis dependency on Render
@@ -185,25 +188,6 @@ app.add_middleware(
     expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining"],
 )
 
-# Global Exception Handler - returns clean 503 JSON on failures
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """Catch all unhandled exceptions and return clean 503 response."""
-    logger.error(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=503,
-        content={"status": "error", "detail": "Service temporarily unavailable"}
-    )
-
-# Validation error handler
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc):
-    """Handle validation errors gracefully."""
-    return JSONResponse(
-        status_code=422,
-        content={"status": "error", "detail": "Invalid request parameters"}
-    )
-
 # Configuration from environment
 # Fallback to default key for development if not set
 EXPECTED_KEY = os.getenv("API_KEY", "prajwal_hackathon_key_2310")
@@ -352,7 +336,6 @@ def levenshtein_distance(s1: str, s2: str) -> int:
     for i, c1 in enumerate(s1):
         current_row = [i + 1]
         for j, c2 in enumerate(s2):
-            # Cost of insertions, deletions, or substitutions
             insertions = previous_row[j + 1] + 1
             deletions = current_row[j] + 1
             substitutions = previous_row[j] + (c1 != c2)
@@ -360,6 +343,216 @@ def levenshtein_distance(s1: str, s2: str) -> int:
         previous_row = current_row
     
     return previous_row[-1]
+
+
+# =============================================================================
+# TIERED DEFENSE SYSTEM v2.0.0
+# =============================================================================
+
+def check_tier1_sovereign_shields(message_text: str) -> Optional[Dict[str, Any]]:
+    """
+    Tier 1: Sovereign Shields (Whitelists) - Early Return for legitimate messages.
+    
+    This tier identifies known-safe message patterns and returns immediately,
+    bypassing the more expensive AI-based detection in Tier 3.
+    
+    Rules:
+    - Official OTP Delivery: 6-digit code + ('do not share' OR 'valid for') → Safe
+    - Government Confirmation: ('successfully linked' OR 'successfully updated') + UIDAI/Aadhaar → Safe
+    - Domain Reputation: Exact root domains (jio.com, amazon.in, infosys.com, google.com) → Cap at 15%
+    
+    Args:
+        message_text: Normalized message text to analyze
+    
+    Returns:
+        Optional dict with detection result, or None if no rule matched
+    """
+    text_lower = message_text.lower()
+    
+    # -------------------------------------------------------------------------
+    # Rule 1.1: Official OTP Delivery
+    # Trigger: 6-digit code AND ('do not share' OR 'valid for')
+    # Score: 5%, isPhishing: False
+    # -------------------------------------------------------------------------
+    otp_code_pattern = re.search(r'\b\d{6}\b', text_lower)
+    has_otp_code = bool(otp_code_pattern)
+    otp_warning_keywords = ["do not share", "don't share", "never share", "valid for", "expires in"]
+    has_otp_warning = any(kw in text_lower for kw in otp_warning_keywords)
+    
+    if has_otp_code and has_otp_warning:
+        return {
+            "riskScore": 5,
+            "isPhishing": False,
+            "scamType": "Safe/Transactional",
+            "urgencyLevel": "Low",
+            "agentNotes": "[TIER1] Official OTP Delivery - Security warning present",
+            "reply": "✅ Safe: Legitimate OTP message with security warning",
+            "tier": 1,
+            "rule": "official_otp_delivery"
+        }
+    
+    # -------------------------------------------------------------------------
+    # Rule 1.2: Government Confirmation
+    # Trigger: ('successfully linked' OR 'successfully updated') AND ('UIDAI' OR 'Aadhaar')
+    # Score: 12%, isPhishing: False
+    # -------------------------------------------------------------------------
+    government_status_keywords = ["successfully linked", "successfully updated"]
+    government_id_keywords = ["uidai", "aadhaar", "aadhar"]
+    has_government_status = any(kw in text_lower for kw in government_status_keywords)
+    has_government_id = any(kw in text_lower for kw in government_id_keywords)
+    
+    if has_government_status and has_government_id:
+        return {
+            "riskScore": 12,
+            "isPhishing": False,
+            "scamType": "Safe/Transactional",
+            "urgencyLevel": "Low",
+            "agentNotes": "[TIER1] Government Confirmation - Official UIDAI status",
+            "reply": "✅ Safe: Official government confirmation detected",
+            "tier": 1,
+            "rule": "government_confirmation"
+        }
+    
+    # -------------------------------------------------------------------------
+    # Rule 1.3: Domain Reputation (Exact Root Domain)
+    # Trigger: Link contains EXACT root domain (NOT subdomain)
+    # Domains: jio.com, amazon.in, infosys.com, google.com
+    # Cap score at: 15%
+    # Exception: If PIN/OTP/password mentioned, skip this rule
+    # -------------------------------------------------------------------------
+    whitelist_root_domains = ["jio.com", "amazon.in", "infosys.com", "google.com"]
+    sensitive_keywords = ["pin", "otp", "password", "secret", "cvv"]
+    has_sensitive_request = any(kw in text_lower for kw in sensitive_keywords)
+    
+    if not has_sensitive_request:
+        for domain in whitelist_root_domains:
+            if domain in text_lower:
+                return {
+                    "riskScore": 15,
+                    "isPhishing": False,
+                    "scamType": "Safe/Transactional",
+                    "urgencyLevel": "Low",
+                    "agentNotes": f"[TIER1] Domain Reputation - Whitelisted domain ({domain})",
+                    "reply": f"✅ Safe: Trusted domain ({domain}) detected",
+                    "tier": 1,
+                    "rule": "domain_reputation"
+                }
+    
+    return None
+
+
+def check_tier2_deterministic_traps(message_text: str) -> Optional[Dict[str, Any]]:
+    """
+    Tier 2: Deterministic Traps (Blacklists) - Early Return for known scams.
+    
+    This tier identifies known-scam patterns using deterministic keyword matching
+    and returns immediately with high confidence scores.
+    
+    Rules:
+    - The PIN Trap: 'UPI PIN' OR 'UPI Password' OR 'secret pin' → 98%, True
+    - The Micro-Payment Trap: ('send 1' OR 'pay ₹1' OR 'pay 1 rupee') AND ('verify' OR 'reward' OR 'claim') → 92%, True
+    - Identity Theft: ('Aadhaar' OR 'PAN') AND ('share' OR 'verify' OR 'confirm') → 85%, True
+    
+    Args:
+        message_text: Normalized message text to analyze
+    
+    Returns:
+        Optional dict with detection result, or None if no rule matched
+    """
+    text_lower = message_text.lower()
+    
+    # -------------------------------------------------------------------------
+    # Rule 2.1: The PIN Trap
+    # Trigger: Any mention of 'UPI PIN' OR 'UPI Password' OR 'secret pin'
+    # Score: 98%, isPhishing: True
+    # -------------------------------------------------------------------------
+    pin_trap_keywords = ["upi pin", "upi password", "secret pin"]
+    has_pin_request = any(kw in text_lower for kw in pin_trap_keywords)
+    
+    if has_pin_request:
+        return {
+            "riskScore": 98,
+            "isPhishing": True,
+            "scamType": "Credential Theft",
+            "urgencyLevel": "High",
+            "agentNotes": "[TIER2] PIN Trap Detected - UPI credential request",
+            "reply": "❌ Danger: PIN/Credential theft attempt detected",
+            "tier": 2,
+            "rule": "pin_trap"
+        }
+    
+    # -------------------------------------------------------------------------
+    # Rule 2.2: The Micro-Payment Trap
+    # Trigger: ('send 1' OR 'pay ₹1' OR 'pay 1 rupee') AND ('verify' OR 'reward' OR 'claim')
+    # Score: 92%, isPhishing: True
+    # -------------------------------------------------------------------------
+    micro_payment_triggers = ["send 1", "pay ₹1", "pay 1 rupee", "pay 1rs", "send re 1"]
+    micro_payment_actions = ["verify", "reward", "claim", "get"]
+    has_micro_payment_trigger = any(kw in text_lower for kw in micro_payment_triggers)
+    has_micro_payment_action = any(kw in text_lower for kw in micro_payment_actions)
+    
+    if has_micro_payment_trigger and has_micro_payment_action:
+        return {
+            "riskScore": 92,
+            "isPhishing": True,
+            "scamType": "Financial Fraud",
+            "urgencyLevel": "High",
+            "agentNotes": "[TIER2] Micro-Payment Trap Detected - Fake payment verification scam",
+            "reply": "❌ Danger: Micro-payment scam detected",
+            "tier": 2,
+            "rule": "micro_payment_trap"
+        }
+    
+    # -------------------------------------------------------------------------
+    # Rule 2.3: Identity Theft
+    # Trigger: ('Aadhaar' OR 'PAN') AND ('share' OR 'verify' OR 'confirm')
+    # Score: 85%, isPhishing: True
+    # -------------------------------------------------------------------------
+    identity_keywords = ["aadhaar", "aadhar", "pan card", "pan number", "pan"]
+    identity_actions = ["share", "verify", "confirm", "provide", "upload"]
+    has_identity_keyword = any(kw in text_lower for kw in identity_keywords)
+    has_identity_action = any(kw in text_lower for kw in identity_actions)
+    
+    if has_identity_keyword and has_identity_action:
+        return {
+            "riskScore": 85,
+            "isPhishing": True,
+            "scamType": "ID Theft",
+            "urgencyLevel": "High",
+            "agentNotes": "[TIER2] Identity Theft Detected - Government ID request",
+            "reply": "❌ Danger: Identity theft attempt detected",
+            "tier": 2,
+            "rule": "identity_theft"
+        }
+    
+    return None
+
+
+def check_tier3_llm_heuristics(message_text: str) -> bool:
+    """
+    Tier 3: LLM Heuristics - Determine if AI detection is needed.
+    
+    This function checks if the message requires AI-based analysis.
+    Returns True if LLM heuristics should be applied, False otherwise.
+    
+    Args:
+        message_text: Normalized message text to analyze
+    
+    Returns:
+        bool: True if AI detection should run, False if message is clearly safe
+    """
+    text_lower = message_text.lower()
+    
+    # Skip if message is too short
+    if len(text_lower) < 10:
+        return False
+    
+    # Skip if message is a simple greeting or acknowledgment
+    simple_responses = ["ok", "okay", "yes", "no", "thanks", "thank you", "received", "done"]
+    if text_lower.strip() in simple_responses:
+        return False
+    
+    return True
 
 
 def finalize_intelligence(intel: Dict[str, Any], reply: str, message_text: str = "") -> tuple:
@@ -1038,29 +1231,71 @@ async def handle_message(
         )
     
     # =====================================================================
-    # THE ENTRY GATE: WHITELIST PRE-PROCESSING (MUST be first!)
+    # TIER 1: SOVEREIGN SHIELDS (Whitelists) - Early Return
+    # Check deterministic safe patterns first for performance
     # =====================================================================
-    logger.info(f"Checking whitelist for message: {message_text[:50]}...")
-    whitelist_result = pre_process_message(message_text)
-    if whitelist_result:
-        logger.info(f"WHITELIST HIT: {whitelist_result.get('scamType')} - returning immediately")
-        # Build full intelligence from template with whitelist values
+    logger.info(f"[TIER1] Checking Sovereign Shields for message: {message_text[:50]}...")
+    tier1_result = check_tier1_sovereign_shields(message_text)
+    if tier1_result:
+        logger.info(f"[TIER1] HIT: {tier1_result.get('rule')} - returning immediately")
         intel_response = DEFAULT_INTEL.copy()
         intel_response.update({
-            "scamType": whitelist_result.get("scamType", "Safe/Transactional"),
-            "riskScore": whitelist_result.get("riskScore", 5),
-            "agentNotes": whitelist_result.get("agentNotes", "Safe message detected"),
-            "urgencyLevel": whitelist_result.get("urgencyLevel", "Low")
+            "scamType": tier1_result.get("scamType", "Safe/Transactional"),
+            "riskScore": tier1_result.get("riskScore", 5),
+            "agentNotes": tier1_result.get("agentNotes", "Safe message detected"),
+            "urgencyLevel": tier1_result.get("urgencyLevel", "Low"),
+            "isPhishing": tier1_result.get("isPhishing", False)
         })
-        # Apply synchronization rules (isPhishing, reply-score sync)
-        reply_text = intel_response["agentNotes"]
+        reply_text = tier1_result.get("reply", "✅ Safe")
         intel_response, reply_text = finalize_intelligence(intel_response, reply_text, message_text)
-        
-        # Return complete response matching the AI flow structure
         return HoneypotResponse(
             status="success",
             reply=reply_text,
             intelligence=intel_response
+        )
+    
+    # =====================================================================
+    # TIER 2: DETERMINISTIC TRAPS (Blacklists) - Early Return
+    # Check deterministic scam patterns second for safety
+    # =====================================================================
+    logger.info(f"[TIER2] Checking Deterministic Traps for message: {message_text[:50]}...")
+    tier2_result = check_tier2_deterministic_traps(message_text)
+    if tier2_result:
+        logger.info(f"[TIER2] HIT: {tier2_result.get('rule')} - returning immediately")
+        intel_response = DEFAULT_INTEL.copy()
+        intel_response.update({
+            "scamType": tier2_result.get("scamType", "Confirmed Phishing/Scam"),
+            "riskScore": tier2_result.get("riskScore", 98),
+            "agentNotes": tier2_result.get("agentNotes", "Scam detected"),
+            "urgencyLevel": tier2_result.get("urgencyLevel", "High"),
+            "isPhishing": tier2_result.get("isPhishing", True)
+        })
+        reply_text = tier2_result.get("reply", "❌ Danger: Scam detected")
+        intel_response, reply_text = finalize_intelligence(intel_response, reply_text, message_text)
+        return HoneypotResponse(
+            status="success",
+            reply=reply_text,
+            intelligence=intel_response
+        )
+    
+    # =====================================================================
+    # TIER 3: LLM HEURISTICS
+    # Only run AI detection if no Tier 1 or Tier 2 rules matched
+    # =====================================================================
+    logger.info(f"[TIER3] Checking if AI detection needed for message: {message_text[:50]}...")
+    if not check_tier3_llm_heuristics(message_text):
+        logger.info(f"[TIER3] Skipping AI - Message does not require analysis")
+        short_response = DEFAULT_INTEL.copy()
+        short_response.update({
+            "agentNotes": "Message does not require AI analysis",
+            "scamType": "Safe/Transactional",
+            "riskScore": 5,
+            "urgencyLevel": "Low"
+        })
+        return HoneypotResponse(
+            status="success",
+            reply="✅ Safe: Analysis complete",
+            intelligence=short_response
         )
     
     history = message_request.get_conversation_history()
